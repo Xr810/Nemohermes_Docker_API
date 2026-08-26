@@ -1,0 +1,13 @@
+# Live credentials and local overrides — never commit.
+.env
+
+# Built image artifact (~190 MB). Ship separately if needed.
+*.tar
+nemohermes-local.tar
+
+# Editor / OS noise
+.DS_Store
+.cursor/
+**/.DS_Store
+**/__pycache__/
+**/*.pyc

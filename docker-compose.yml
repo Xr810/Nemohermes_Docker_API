@@ -1,0 +1,122 @@
+# The only Compose file. It both runs the prebuilt image and rebuilds it, so
+# there is nothing to keep in sync.
+#
+# Normal deploy -- load the shipped image, then start:
+#
+#   docker load -i nemohermes-local.tar
+#   cp .env.example .env     # then set INFERENCE_API_KEY
+#   docker compose up -d
+#
+# Rebuild after editing the Dockerfile:
+#
+#   docker compose up -d --build
+#
+# `build:` and `image:` together give exactly the behaviour this package wants,
+# and the distinction matters because a rebuild here is slow:
+#
+#   image present  + `up`           -> reuses it. No build, no registry pull,
+#                                      even if the Dockerfile changed since.
+#   image present  + `up --build`   -> rebuilds and replaces the tag.
+#   image missing  + `up`           -> builds from this Dockerfile. It does not
+#                                      try to pull nemohermes:local, which
+#                                      exists in no registry.
+#
+# So loading the tar is an optimisation, not a requirement: without it, the
+# first `up` simply builds the same image locally. Do not use `--no-build`,
+# which is the one path that does attempt a registry pull and then fails with
+# "No such image: nemohermes:local".
+#
+# The image carries no configuration. Every value comes from .env at container
+# start, so changing the key or the model is `docker compose up -d`, never a
+# rebuild.
+#
+# The first start needs network regardless: the container installs the
+# OpenShell / NemoClaw CLI from nvidia.com and its inner dockerd pulls the
+# sandbox base images. Neither is in the tar. Later starts skip both.
+#
+# Sandboxes are created by that inner dockerd (Docker-in-Docker), so they
+# appear in `docker compose exec nemohermes docker ps`, never in the host's
+# `docker ps`.
+
+services:
+  nemohermes:
+    build: .
+    image: nemohermes:local
+    container_name: nemohermes
+    restart: unless-stopped
+
+    # ---- systemd as PID 1 + inner dockerd ----
+    # NemoClaw runs the OpenShell gateway as a systemd user unit and will not
+    # attach to a listener it cannot prove that unit owns, so onboard needs a
+    # real init. Inner dockerd also needs cgroup and net admin; unprivileged
+    # DinD is not viable here. Privileged covers both.
+    #
+    # cgroup v2 host: leave the cgroup namespace private (Docker's default) and
+    # let systemd mount its own writable cgroup2 inside it. The old recipe of
+    # `cgroup: host` plus a rw bind of the host /sys/fs/cgroup is cgroup v1 era
+    # -- here it would hand this systemd the host's whole cgroup tree.
+    privileged: true
+
+    # Docker's tmpfs defaults are noexec and size=64m. /tmp must NOT be in here:
+    # the OpenShell installer unpacks into it and then gates installation on
+    # `[ -x $tmpdir/openshell-gateway ]`, so noexec makes that test false and
+    # 64m cannot even hold the 67 MB gateway binary -- the installer then skips
+    # the Docker-driver binaries and onboard dies with "did not install the
+    # required Docker-driver binaries".
+    tmpfs:
+      - /run:size=256m
+      - /run/lock:size=8m
+
+    # systemd shuts down on SIGRTMIN+3; the Dockerfile sets STOPSIGNAL to match.
+    # Inner dockerd must stop its sandbox containers first.
+    stop_grace_period: 60s
+
+    ports:
+      - "${HERMES_API_PORT:-8642}:${HERMES_API_PORT:-8642}"
+      - "${HERMES_DASHBOARD_PORT:-18789}:${HERMES_DASHBOARD_PORT:-18789}"
+
+    # Required on purpose: without .env the container would start with no
+    # inference endpoint and only fail minutes later, inside onboard. Compose
+    # instead refuses immediately with "env file ... not found".
+    #
+    # Compose checks only that the file exists, not that the values are filled
+    # in, so an empty INFERENCE_API_KEY still fails late. .env never enters the
+    # build context (see .dockerignore), so no secret reaches an image layer.
+    env_file:
+      - .env
+
+    # Set here, not in .env, so the image always knows it is the compose
+    # deployment.
+    environment:
+      IN_CONTAINER: "1"
+      # Fallback if OpenShell has not already bound loopback. Published ports
+      # still work when forwards stay on 127.0.0.1: the entrypoint DNATs eth0
+      # to loopback. For loopback-only host access, change the ports bind above
+      # to "127.0.0.1:8642:8642" rather than editing this.
+      FORWARD_BIND: "0.0.0.0"
+
+    volumes:
+      # HOME must stay /root: systemd synthesizes root's home as /root
+      # regardless of /etc/passwd, so its user manager looks for the gateway
+      # unit and resolves %E / %S there. CLI, NemoClaw state, and the ~107 MB
+      # of binaries live here so they survive a recreate.
+      - nemohermes-home:/root
+      # Inner overlay2 on a volume, not on the wrapper's overlay filesystem.
+      # Also keeps sandbox images across `compose down` (without -v).
+      - nemohermes-docker:/var/lib/docker
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -m 5 http://127.0.0.1:${HERMES_API_PORT:-8642}/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # First start boots systemd, inner dockerd, installs the CLI and creates
+      # the sandbox. /health returning 200 only proves the forward is up.
+      start_period: 900s
+
+# `docker compose down` keeps both volumes, so the next `up` skips the CLI
+# install and the image pull. `down -v` wipes them and the next start is a
+# first start again.
+volumes:
+  nemohermes-home:
+  nemohermes-docker:

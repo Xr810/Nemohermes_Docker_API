@@ -1,0 +1,27 @@
+# Build context for `docker compose build` / `docker compose up --build`.
+#
+# The Dockerfile creates every file it needs with heredoc COPY, so nothing in
+# this folder has to reach the daemon. Keeping the context near-empty also
+# keeps the 190 MB image tar out of it -- sending that on every build costs
+# seconds and buys nothing.
+#
+# Add an exception here if you ever introduce a real `COPY <path>` from disk.
+
+# Secrets and local configuration: must never enter an image layer.
+.env
+.env.example
+
+# Build outputs.
+*.tar
+
+# Documentation and the Compose file: read on the host, never by the daemon.
+*.md
+docker-compose.yml
+
+# Editor, VCS and OS noise.
+.git
+.gitignore
+.cursor
+**/.DS_Store
+**/__pycache__/
+**/*.pyc
