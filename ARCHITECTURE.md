@@ -1,13 +1,13 @@
-# NemoHermes — Full Reference
+# NemoHermes — Architecture
 
 How the container is built, why it is built that way, and what to do when it
-misbehaves. Start with [README.md](README.md) for installation; this document is
-the reference behind it.
+misbehaves. Start with [README.md](README.md) to build and run it; this document
+is the reference behind it.
 
-**Scope: the Docker path only.** This release package contains no bare-metal
-installer. The Ubuntu path (`deploy.sh`, `01-infra.sh` … `05-verify.sh`,
-`lib.sh`, `config.env`, `resources/`) and the in-sandbox Open WebUI install live
-in the source repository, not here. Nothing in this folder reads or needs them.
+**Scope: the Docker path only.** This package contains no bare-metal installer.
+The Ubuntu path (`deploy.sh`, `01-infra.sh` … `05-verify.sh`, `lib.sh`,
+`config.env`, `resources/`) and the in-sandbox Open WebUI install live in the
+source repository, not here. Nothing in this folder reads or needs them.
 
 Day-two operations — changing the model or provider, adding MCP servers,
 reading logs — are in [OPERATIONS.md](OPERATIONS.md).
@@ -72,9 +72,10 @@ Everything lives in `.env`; the image holds none of it. Changing the key, the
 model or the sandbox name is `docker compose up -d` — never a rebuild. Rebuild
 only after the `Dockerfile` RUN layers or the entrypoint change.
 
-`.env` is excluded from the build context by `.dockerignore`, so no secret is
-stored in an image layer and `nemohermes:local` is safe to `docker save` and
-copy to another machine.
+No secret can reach an image layer: the `Dockerfile` creates every file it
+needs with heredoc `COPY` and never `COPY`s from the build context, and
+`.dockerignore` excludes `.env` from that context as defence in depth. So
+`nemohermes:local` is safe to `docker save` and copy to another machine.
 
 Compose **requires** `.env` to exist and refuses to start without it, rather than
 failing minutes later inside onboard. It does not check that the values are
@@ -320,9 +321,14 @@ One Compose file covers both running and rebuilding, because `build:` and
 | Image present, `up --build` | Rebuilds and replaces the tag |
 | Image missing, `up` | Builds from the `Dockerfile`. No attempt to pull `nemohermes:local`, which exists in no registry |
 
-Loading the tar is therefore an optimisation, not a requirement — it just saves
-the first build. Avoid `--no-build`: it is the one path that does attempt a
-registry pull, and it fails with `No such image: nemohermes:local`.
+Loading a tar is therefore an optimisation, not a requirement — it just saves
+the first build, and no tar is committed to this repository (`.gitignore`
+excludes `*.tar`), so a fresh clone always builds. Avoid `--no-build`: it is the
+one path that does attempt a registry pull, and it fails with `No such image:
+nemohermes:local`.
+
+Loading a tar does not make the first start offline either: the CLI install and
+the sandbox base images are not in it.
 
 The entrypoint is a heredoc inside the `Dockerfile`, so editing the bootstrap
 logic means editing the `Dockerfile` and rebuilding. `.dockerignore` keeps the
@@ -346,7 +352,7 @@ every file it needs with heredoc `COPY` and reads nothing from the context.
 | `already exists as OpenClaw` | A sandbox left in `Error` phase. The entrypoint clears these; if it persists, `docker compose exec nemohermes openshell -g nemoclaw sandbox delete <name>` |
 | Onboard fails at step 2/8 with a firewall warning | The gateway bridge route. Check the journal for `sandbox route:` and confirm `openshell-docker` exists in `docker compose exec nemohermes docker network ls` |
 | Sandbox container restarts in a loop | Config drift — see [OPERATIONS.md](OPERATIONS.md#approval-mode). Check `docker compose exec nemohermes nemoclaw <sandbox> logs --tail 50` |
-| `/health` returns 200 but chat fails | The forward is up and the chain is not. Run the `chat/completions` check in [README.md](README.md) |
+| `/health` returns 200 but chat fails | The forward is up and the chain is not. Run the `chat/completions` check in [README.md](README.md#verify-it-is-actually-serving) |
 | API returns a model error | Send `hermes-agent`, not the `INFERENCE_MODEL` value |
 | Other device cannot reach `:8642` | Use this machine's LAN IP, not `127.0.0.1`; published ports need the process to listen on `0.0.0.0` (compose sets `FORWARD_BIND`); allow the port on the host firewall |
 | MCP registration failed | Non-fatal by design. See [OPERATIONS.md](OPERATIONS.md#mcp-servers) |
@@ -356,12 +362,16 @@ every file it needs with heredoc `COPY` and reads nothing from the context.
 
 | Path | Contents |
 |---|---|
-| `nemohermes-local.tar` | The prebuilt wrapper image, ~190 MB, tagged `nemohermes:local`. No secrets |
-| `docker-compose.yml` | The only Compose file: runs the prebuilt image and rebuilds it with `--build`. Carries the full rationale for every runtime setting |
 | `Dockerfile` | Packages, systemd as PID 1, inner dockerd, and the bootstrap script it runs (onboard, approvals, MCP, forwards, and the reconciliation above). No configuration, no secrets, no Open WebUI |
-| `.dockerignore` | Build context exclusions: the image tar, `.env`, the docs |
+| `docker-compose.yml` | The only Compose file: runs the image and rebuilds it with `--build`. Carries the full rationale for every runtime setting |
 | `.env.example` | Configuration template with every supported variable. Shareable |
-| `.env` | Live configuration for this machine. Contains credentials; keep it out of git and off shared drives |
-| `README.md` | Entry point: install, verify, reconfigure |
-| `README-full.md` | This file |
+| `.env` | Live configuration for this machine. Contains credentials; not in the repository, and keep it off shared drives |
+| `.dockerignore` | Build context exclusions: any image tar, `.env`, the docs |
+| `.gitignore` | Excludes `.env`, `*.tar` and editor/OS noise from git |
+| `README.md` | Entry point: build, run, verify |
+| `ARCHITECTURE.md` | This file |
 | `OPERATIONS.md` | Day-two operations |
+
+The built image is `nemohermes:local` (~190 MB as a tar). It is produced by
+`docker compose build`, never committed here — see
+[Rebuilding and reshipping](#rebuilding-and-reshipping).

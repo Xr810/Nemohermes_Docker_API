@@ -1,9 +1,9 @@
 # Live credentials and local overrides — never commit.
 .env
 
-# Built image artifact (~190 MB). Ship separately if needed.
+# Built image artifact (~190 MB). Produced by `docker save`, never committed --
+# a fresh clone builds the image instead. Ship it out of band if needed.
 *.tar
-nemohermes-local.tar
 
 # Editor / OS noise
 .DS_Store

@@ -1,9 +1,9 @@
-# The only Compose file. It both runs the prebuilt image and rebuilds it, so
-# there is nothing to keep in sync.
+# The only Compose file. It both runs the image and rebuilds it, so there is
+# nothing to keep in sync.
 #
-# Normal deploy -- load the shipped image, then start:
+# Normal deploy from a fresh clone -- there is no image tar in the repository,
+# so the first `up` builds one:
 #
-#   docker load -i nemohermes-local.tar
 #   cp .env.example .env     # then set INFERENCE_API_KEY
 #   docker compose up -d
 #
@@ -21,18 +21,20 @@
 #                                      try to pull nemohermes:local, which
 #                                      exists in no registry.
 #
-# So loading the tar is an optimisation, not a requirement: without it, the
-# first `up` simply builds the same image locally. Do not use `--no-build`,
-# which is the one path that does attempt a registry pull and then fails with
-# "No such image: nemohermes:local".
+# If someone handed you a prebuilt tar, `docker load -i nemohermes-local.tar`
+# before the first `up` and the build is skipped. That is an optimisation, not
+# a requirement. Do not use `--no-build`, which is the one path that does
+# attempt a registry pull and then fails with "No such image:
+# nemohermes:local".
 #
 # The image carries no configuration. Every value comes from .env at container
 # start, so changing the key or the model is `docker compose up -d`, never a
 # rebuild.
 #
-# The first start needs network regardless: the container installs the
-# OpenShell / NemoClaw CLI from nvidia.com and its inner dockerd pulls the
-# sandbox base images. Neither is in the tar. Later starts skip both.
+# The first start needs network regardless of how the image got here: the
+# container installs the OpenShell / NemoClaw CLI from nvidia.com and its inner
+# dockerd pulls the sandbox base images. Neither is in the image. Later starts
+# skip both.
 #
 # Sandboxes are created by that inner dockerd (Docker-in-Docker), so they
 # appear in `docker compose exec nemohermes docker ps`, never in the host's
@@ -80,8 +82,9 @@ services:
     # instead refuses immediately with "env file ... not found".
     #
     # Compose checks only that the file exists, not that the values are filled
-    # in, so an empty INFERENCE_API_KEY still fails late. .env never enters the
-    # build context (see .dockerignore), so no secret reaches an image layer.
+    # in, so an empty INFERENCE_API_KEY still fails late. No secret can reach an
+    # image layer either way: the Dockerfile never COPYs from the build context,
+    # and .dockerignore excludes .env from it as defence in depth.
     env_file:
       - .env
 

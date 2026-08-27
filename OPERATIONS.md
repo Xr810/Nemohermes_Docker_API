@@ -3,7 +3,7 @@
 Day-two operations for a deployment created by `docker compose up -d`: changing
 the model or provider, managing MCP servers, and reading logs. Installation is
 covered in [README.md](README.md); the architecture and its constraints are in
-[README-full.md](README-full.md).
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 **Scope: the Docker path only.** This package has no bare-metal installer, no
 `deploy.sh`, no `config.env`, and no in-sandbox Open WebUI. Connect a remote
@@ -297,7 +297,7 @@ End-to-end check — `/health` returning 200 only proves the forward is up:
 
 ```bash
 KEY=$(docker compose exec -T nemohermes \
-        awk -F= '/^OPENAI_API_KEY=/{print $2}' /root/hermes-openai.env)
+        sed -n 's/^OPENAI_API_KEY=//p' /root/hermes-openai.env | tr -d '\r')
 
 curl -s -X POST http://127.0.0.1:8642/v1/chat/completions \
   -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -325,7 +325,7 @@ A sandbox container in `restarting` state almost always means config drift.
 
 For start-up and onboard failures — inner dockerd, the user manager, the gateway
 bridge route, stale locks — see
-[README-full.md](README-full.md#troubleshooting).
+[ARCHITECTURE.md](ARCHITECTURE.md#troubleshooting).
 
 ## Escape hatch
 

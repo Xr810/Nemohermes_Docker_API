@@ -1,22 +1,38 @@
 # syntax=docker/dockerfile:1
 #
-# Wrapper image for the Hermes sandbox: Ubuntu, systemd as PID 1, an inner
-# dockerd, and the bootstrap script that runs onboard, approvals, MCP and the
-# port forwards.
+# NemoHermes wrapper image -- builds `nemohermes:local`.
+#
+# Ubuntu 24.04, systemd as PID 1, an inner dockerd, and the bootstrap script
+# that runs onboard, approvals, MCP registration and the port forwards. The
+# Hermes sandbox itself is NOT in this image: the OpenShell gateway creates it
+# as a child container on the first start. See ARCHITECTURE.md.
 #
 # This file holds no secrets and no per-deployment configuration. Compose
 # injects all of that from .env at container start (env_file), so the image is
 # byte-identical on every machine, changing a key never triggers a rebuild, and
-# nothing sensitive lands in an image layer. The ENV below is runtime constants
-# only.
+# nothing sensitive lands in an image layer. The ENV block below is runtime
+# constants only.
 #
-# A normal deploy does not build this file: it loads the prebuilt tar, and
-# Compose reuses that image rather than building. Rebuild only after changing
-# the RUN layers or the entrypoint below:
+# Build and run:
 #
-#   docker compose up -d --build
+#   docker compose build            # produce nemohermes:local
+#   docker compose up -d            # builds first if the image is missing
+#   docker compose up -d --build    # rebuild after editing this file
 #
-# To reship the result as a tar, see README.md.
+# Nothing is COPYd from the build context -- every file is created here with a
+# heredoc -- so the context stays empty by design (see .dockerignore).
+#
+# ---------------------------------------------------------------------------
+# Comment conventions used throughout this file and the embedded script
+# ---------------------------------------------------------------------------
+#
+#   * Section banner:  `# ---- Title ----` on one line, sentence case.
+#   * Every shell function opens with a one-line summary of what it does;
+#     longer rationale follows underneath it in the same block.
+#   * Rationale comments state the FAILURE FIRST, then the fix. Nearly every
+#     workaround here exists because of one specific error message, and that
+#     message is the only thing that makes the workaround reviewable later.
+#   * Lines wrap at 79 columns. `--` is used for em dashes, ASCII only.
 
 FROM ubuntu:24.04
 
@@ -46,8 +62,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/root \
     PATH="/root/bin:/root/.local/bin:/usr/local/bin:${PATH}"
 
-# ---- packages (the NVIDIA CLI is installed at first run instead: it needs a
-# live Docker engine, which does not exist at build time) ----
+# ---- Packages ----
+# The NVIDIA CLI is deliberately not installed here: it needs a live Docker
+# engine, which does not exist at build time. The bootstrap installs it on the
+# first run instead.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
@@ -112,22 +130,58 @@ RUN systemctl mask \
  && mkdir -p /var/lib/systemd/linger \
  && touch /var/lib/systemd/linger/root
 
-# ---- bootstrap script: onboard, approvals, MCP, Hermes API/dashboard ----
+# ---- Bootstrap script ----
+# Onboard, approvals, MCP registration, and the Hermes API/dashboard forwards.
+# Embedded as a heredoc, so editing it means editing this Dockerfile and
+# rebuilding. Its own section map is in the header comment below.
 COPY <<'ENTRY' /usr/local/sbin/nemohermes
 #!/usr/bin/env bash
+#
+# NemoHermes bootstrap. Runs as nemohermes.service on every container start,
+# and is idempotent: on a healthy deployment every step below is a no-op, so a
+# restart costs seconds rather than re-running onboard.
+#
+# What happens at run time, in order -- each step depends on the one before it:
+#
+#   1. Import configuration from PID 1        (systemd gives us a clean env)
+#   2. Validate the inference settings and the sandbox name
+#   3. Wait for the inner docker engine
+#   4. Wait for the systemd user manager      (onboard drives it via systemctl)
+#   5. Install network routes                 (sandbox -> gateway, published ports)
+#   6. Reconcile leftover state               (locks, PKI, errored sandbox, paths)
+#   7. Install the CLI and onboard            (only when there is no Ready sandbox)
+#   8. Apply approvals.mode and register MCP
+#   9. Supervise the API and dashboard forwards, forever
+#
+# The `# ---- Title ----` banners below group the code by TOPIC, not by that
+# order: most steps are a function defined under its own banner and called
+# later, once its prerequisites are up. Follow the top-level calls to read it
+# in execution order.
+#
+# Steps 6 and 7 are where the bulk of this script lives. NemoClaw does not
+# clean up after an interrupted run, and each kind of leftover wedges every
+# later start with an error that blames something else -- so each block below
+# names the exact symptom it prevents. ARCHITECTURE.md tabulates them.
 set -euo pipefail
 
+# ---- Import configuration from PID 1 ----
+#
 # systemd hands services a clean environment, so nothing compose put in
 # `env_file` reaches this script -- those values live only in PID 1's
 # environment. Read them back from there, whitelisted, before anything else
 # runs. Without this the script sees no INFERENCE_API_KEY and dies in
 # need_inference even though .env was correct.
+#
+# INVARIANT: every variable documented in .env.example must be matched by a
+# pattern below. A variable missing here is not an error -- it is silently
+# ignored, and the deployment quietly runs on the built-in default instead.
 if [ -r /proc/1/environ ]; then
   while IFS= read -r -d '' kv; do
     case "$kv" in
-      INFERENCE_*|SANDBOX_NAME=*|APPROVALS_MODE=*|MCP_*|FORWARD_BIND=*|\
-      HERMES_*|IN_CONTAINER=*|AGENT=*|ONBOARD_FRESH=*|SANDBOX_WAIT_SECS=*|\
-      DOCKER_WAIT_SECS=*|USER_MANAGER_WAIT_SECS=*|NEMOCLAW_*)
+      INFERENCE_*|SANDBOX_*|APPROVALS_MODE=*|MCP_*|FORWARD_BIND=*|\
+      HERMES_*|IN_CONTAINER=*|AGENT=*|ONBOARD_FRESH=*|\
+      DOCKER_WAIT_SECS=*|USER_MANAGER_WAIT_SECS=*|NEMOCLAW_*|OPENSHELL_*)
+        # shellcheck disable=SC2163  # $kv is a whole NAME=value pair.
         export "$kv"
         ;;
     esac
@@ -140,10 +194,18 @@ for nvmbin in "${HOME}"/.nvm/versions/node/*/bin; do
   [ -d "$nvmbin" ] && export PATH="${nvmbin}:${PATH}"
 done
 
+# ---- Helpers ----
+
+# Logging helpers. The unit runs with StandardOutput=journal+console, so every
+# line here lands in `journalctl -u nemohermes` -- the only place the bootstrap
+# is observable, since the workload is not PID 1 and `docker compose logs` stays
+# empty.
 log() { echo "[nemohermes] $*"; }
 die() { echo "[nemohermes] ERROR: $*" >&2; exit 1; }
 log_warn_mcp() { echo "[nemohermes] WARN: $*" >&2; }
 
+# True when the name satisfies the sandbox naming rule OpenShell enforces:
+# 1-19 chars, lowercase alphanumerics and single hyphens, leading letter.
 sandbox_name_valid() {
   local name="${1:-}"
   local n=${#name}
@@ -152,6 +214,9 @@ sandbox_name_valid() {
   [[ "$name" =~ ^[a-z]([a-z0-9-]*[a-z0-9])?$ ]]
 }
 
+# Fail early and legibly when the inference host does not resolve, or resolves
+# into 198.18.0.0/15 -- the fake-ip range a local proxy (Surge/Clash) hands out.
+# Onboard would otherwise fail much later with an unrelated-looking error.
 check_inference_dns() {
   local host ip
   host="$(printf '%s' "${INFERENCE_BASE_URL}" | sed -E 's#^[a-z][a-z0-9+.-]*://([^/:]+).*#\1#')"
@@ -171,10 +236,13 @@ check_inference_dns() {
   log "inference host ${host} -> ${ip}"
 }
 
+# Container ID of the sandbox, as the inner dockerd sees it.
 cid() {
   docker ps -a --filter "label=openshell.ai/sandbox-name=${SANDBOX_NAME}" --format '{{.ID}}' | awk 'NR==1{print}'
 }
 
+# True when the gateway currently lists SANDBOX_NAME in the Ready phase.
+# The sed strips the CLI's ANSI colour codes so grep/awk can match.
 sandbox_is_ready() {
   timeout 5 openshell -g nemoclaw sandbox list 2>/dev/null \
     | sed 's/\x1b\[[0-9;]*m//g' \
@@ -182,6 +250,8 @@ sandbox_is_ready() {
   return 1
 }
 
+# Name of any Ready sandbox, used as a fallback when SANDBOX_NAME is not one.
+# Prints nothing and still succeeds when there is none.
 first_ready_sandbox() {
   timeout 5 openshell -g nemoclaw sandbox list 2>/dev/null \
     | sed 's/\x1b\[[0-9;]*m//g' \
@@ -202,6 +272,8 @@ wait_sandbox_listed_ready() {
   return 1
 }
 
+# Block until the sandbox reaches Ready, or give up after SANDBOX_WAIT_SECS.
+# Sized for a first create, which builds an 84-layer image.
 wait_sandbox_ready() {
   local secs="${SANDBOX_WAIT_SECS:-180}" waited=0
   log "waiting for sandbox '${SANDBOX_NAME}' Ready (max ${secs}s)"
@@ -213,6 +285,10 @@ wait_sandbox_ready() {
   return 1
 }
 
+# Re-anchor the Hermes config integrity hash after a config write.
+# NemoClaw pins the SHA-256 of config.yaml in .config-hash; writing the config
+# without updating the anchor makes the sandbox restart-loop on
+# HERMES_MCP_CONFIG_DRIFT.
 sync_config_hash() {
   local id="$1" new_hash
   docker cp "${id}:/sandbox/.hermes/config.yaml" /tmp/hm-config.yaml
@@ -223,11 +299,15 @@ sync_config_hash() {
   docker cp /tmp/hm-config-hash.new "${id}:/sandbox/.hermes/.config-hash"
 }
 
+# This host's LAN address, for the connection hint file. Empty is acceptable.
 lan_ip() {
   ip -4 route get 1.1.1.1 2>/dev/null \
     | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}'
 }
 
+# Write ~/hermes-openai.env: the base URL and API key a remote Open WebUI needs.
+# The key is the sandbox's own API_SERVER_KEY, never the inference provider key,
+# so it is read out of the sandbox rather than taken from .env.
 write_openai_env() {
   local id="$1" key host_hint=""
   docker cp "${id}:/sandbox/.hermes/.env" /tmp/hermes.env
@@ -247,6 +327,9 @@ OPENAI_API_KEY=${key}
 EOF
 }
 
+# ---- Settings and validation ----
+# Treat an empty value as unset so `${VAR:-default}` and need_inference agree:
+# compose passes every key in .env through, filled in or not.
 [ -z "${INFERENCE_BASE_URL:-}" ] && unset INFERENCE_BASE_URL || true
 [ -z "${INFERENCE_MODEL:-}" ] && unset INFERENCE_MODEL || true
 [ -z "${INFERENCE_API_KEY:-}" ] && unset INFERENCE_API_KEY || true
@@ -255,6 +338,8 @@ SANDBOX_NAME="${SANDBOX_NAME:-main}"
 sandbox_name_valid "${SANDBOX_NAME}" \
   || die "invalid SANDBOX_NAME '${SANDBOX_NAME}' (1-19 lowercase letters/digits, start with a letter, single hyphens)"
 
+# Refuse to continue without a complete inference configuration. Called before
+# each step that would otherwise fail deep inside the CLI with a vaguer error.
 need_inference() {
   [ -n "${INFERENCE_BASE_URL:-}" ] && [ -n "${INFERENCE_MODEL:-}" ] && [ -n "${INFERENCE_API_KEY:-}" ] \
     || die "Set INFERENCE_BASE_URL, INFERENCE_MODEL and INFERENCE_API_KEY in .env (cp .env.example .env), then: docker compose up -d"
@@ -268,7 +353,7 @@ HERMES_DASHBOARD_PORT="${HERMES_DASHBOARD_PORT:-18789}"
 LOG_DIR=/var/log
 mkdir -p "$LOG_DIR" /var/run/nemohermes
 
-# ---- gateway bind address reconciliation ----
+# ---- Gateway bind address reconciliation ----
 # NemoClaw writes OPENSHELL_BIND_ADDRESS into gateway.env once, at first
 # onboard, and never revisits it. That file lives in the persisted /root
 # volume, so a container that was first started before this setting existed
@@ -288,6 +373,9 @@ reconcile_gateway_bind() {
   sleep 5
 }
 
+# ---- Inner docker engine ----
+
+# Block until the inner engine answers, or give up after DOCKER_WAIT_SECS.
 # Inner dockerd is a systemd unit, not a bind-mounted host socket. It can lag
 # a few seconds behind PID 1 even with After=docker.service.
 wait_docker() {
@@ -311,6 +399,8 @@ wait_docker || die "inner docker engine never became ready; check: systemctl sta
 # because the alternative is onboard aborting at step 2/8 with a message that
 # blames systemctl rather than the missing bus.
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}"
+# Block until root's systemd user manager accepts commands, or give up.
+# `degraded` counts as ready: a failed unrelated user unit must not block onboard.
 wait_user_manager() {
   local secs="${USER_MANAGER_WAIT_SECS:-90}" waited=0
   systemctl start user@0.service >/dev/null 2>&1 || true
@@ -328,7 +418,7 @@ wait_user_manager() {
 wait_user_manager || die "systemd user manager (user@0.service) never became ready; onboard cannot start the gateway. Check: systemctl status user@0.service"
 reconcile_gateway_bind
 
-# ---- sandbox -> gateway route ----
+# ---- Sandbox -> gateway route ----
 # NemoClaw pins the gateway to 127.0.0.1 and rejects an override outright
 # ("NEMOCLAW_GATEWAY_BIND_ADDRESS=0.0.0.0 is not supported ... while gateway
 # JWT auth is active"). Sandbox containers, though, dial it at
@@ -387,7 +477,7 @@ install_published_port_routes() {
 }
 install_published_port_routes || log "could not DNAT published API/dashboard ports to loopback"
 
-# ---- stale lifecycle locks ----
+# ---- Stale lifecycle locks ----
 # NemoClaw guards sandbox mutations with lock files under ~/.nemoclaw/state,
 # recording the owner pid and PID namespace. Those live in the persisted /root
 # volume, so a container that is recreated while a lock is held leaves the lock
@@ -436,7 +526,7 @@ if [ -z "${NEMOCLAW_SANDBOX_GPU:-}" ]; then
   fi
 fi
 
-# ---- errored sandbox from a failed create ----
+# ---- Errored sandbox from a failed create ----
 # A create that dies partway leaves the sandbox in Error phase, and the next
 # onboard refuses it as "already exists as OpenClaw" -- a misleading message
 # that has nothing to do with agent choice. An Error-phase sandbox holds no
@@ -578,6 +668,7 @@ ensure_image() {
   docker pull "$ref" || log "pull failed for ${ref} (onboard may still resolve another candidate)"
 }
 
+# Make sure the sandbox base images are present before onboard needs them.
 ensure_sandbox_images() {
   local ref
   for ref in ghcr.io/nvidia/nemoclaw/hermes-sandbox-base:latest \
@@ -587,7 +678,9 @@ ensure_sandbox_images() {
   done
 }
 
-# ---- NVIDIA CLI (binaries only) + onboard (the gateway creates the sandbox) ----
+# ---- NVIDIA CLI install and onboard ----
+# Installs the CLI binaries only; the gateway is what actually creates the
+# sandbox, during onboard.
 if ! command -v nemoclaw >/dev/null || ! command -v openshell >/dev/null; then
   need_inference
   check_inference_dns
@@ -615,7 +708,7 @@ clear_errored_sandbox
 publish_shared_binaries || die "could not publish openshell-sandbox to ${HOME}/bin"
 reconcile_supervisor_bin
 
-# ---- partial gateway PKI ----
+# ---- Partial gateway PKI ----
 # The gateway refuses to start on a half-written TLS tree ("partial PKI state
 # ... some files exist but not all") and never cleans it up, so a run
 # interrupted during certificate generation wedges every later start.
@@ -636,7 +729,7 @@ clear_partial_gateway_pki() {
 }
 clear_partial_gateway_pki
 
-# ---- empty-directory bind-mount debris ----
+# ---- Empty-directory bind-mount debris ----
 # Told to bind-mount a file that does not exist, dockerd does not fail: it
 # creates an empty DIRECTORY at that path. Each one then poisons the real file
 # -- the gateway cannot write sandbox.jwt because a directory already occupies
@@ -646,6 +739,8 @@ clear_partial_gateway_pki
 # a real key, certificate or token is never at risk.
 clear_dood_debris() {
   local d n=0
+  # shellcheck disable=SC2044  # Word splitting is safe: these are fixed paths
+  # under HOME=/root, and the names matched are token/cert filenames.
   for d in $(find "${HOME}/.local/state/openshell" "${HOME}/.local/state/nemoclaw" \
                -type d \( -name '*.jwt' -o -name '*.crt' -o -name '*.key' -o -name '*.pem' \) \
                2>/dev/null); do
@@ -699,7 +794,8 @@ wait_sandbox_ready || die "sandbox not Ready"
 CID="$(cid)"
 [ -n "$CID" ] || die "sandbox container not found"
 
-# ---- approvals.mode + config-hash anchor (skipped if APPROVALS_MODE is empty) ----
+# ---- approvals.mode and the config-hash anchor ----
+# Skipped entirely when APPROVALS_MODE is empty.
 if [ -n "${APPROVALS_MODE}" ]; then
   case "$APPROVALS_MODE" in
     off|smart|manual) ;;
@@ -730,7 +826,8 @@ if [ -n "${APPROVALS_MODE}" ]; then
   fi
 fi
 
-# ---- MCP router registration (skipped if MCP_URL is empty) ----
+# ---- MCP router registration ----
+# Skipped entirely when MCP_URL is empty.
 if [ -n "${MCP_URL:-}" ]; then
   [ -n "${MCP_ROUTER_TOKEN:-}" ] || die "MCP_URL is set but MCP_ROUTER_TOKEN is empty"
   if nemoclaw "${SANDBOX_NAME}" mcp list --json 2>/dev/null | grep mcp-router >/dev/null; then
@@ -765,12 +862,22 @@ fi
 
 write_openai_env "$CID"
 
+# ---- API and dashboard forwards ----
+# The last phase, and the only one that never returns: the forwards are what
+# make the sandbox reachable from the host, and they are the piece most likely
+# to die on its own, so they are supervised rather than merely started.
+
+# True when something already listens on the port, by either probe.
+# ss covers the normal case; lsof is the fallback when procfs is restricted.
 port_is_listening() {
   local p="$1"
   ss -lnt 2>/dev/null | grep -Eq ":${p}[[:space:]]" && return 0
   lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1
 }
 
+# Start a long-running helper once, detached, logging to LOG_DIR/<name>.log.
+# `pattern` identifies an already-running copy, so the supervision loop below
+# can call this every few seconds and only restart what actually died.
 ensure() {
   local name="$1" pattern="$2"
   shift 2
@@ -807,6 +914,9 @@ start_all() {
   fi
 }
 
+# Everything is up. Announce the endpoints, then supervise the forwards for
+# the lifetime of the container. The trap kills the children on SIGTERM so
+# `docker compose down` does not wait out the 60s stop_grace_period.
 log "Hermes API  http://${BIND}:${HERMES_API_PORT}/v1"
 log "dashboard   http://${BIND}:${HERMES_DASHBOARD_PORT}/"
 log "Open WebUI on another device: Admin → Connections → OpenAI"

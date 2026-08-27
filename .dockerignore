@@ -1,9 +1,17 @@
-# Build context for `docker compose build` / `docker compose up --build`.
+# Build context exclusions for `docker compose build` / `up --build`.
 #
-# The Dockerfile creates every file it needs with heredoc COPY, so nothing in
-# this folder has to reach the daemon. Keeping the context near-empty also
-# keeps the 190 MB image tar out of it -- sending that on every build costs
-# seconds and buys nothing.
+# WHAT THIS FILE IS FOR
+#
+# Before Docker reads a single Dockerfile instruction it tars up this folder
+# and uploads it to the daemon as the "build context". This Dockerfile creates
+# every file it needs with heredoc COPY and reads nothing from disk, so that
+# upload is pure waste -- and it is not free: a locally built
+# nemohermes-local.tar is ~190 MB, and without the rules below it would be
+# re-sent to the daemon on every single build.
+#
+# So this file is a build-speed optimisation, not a security control. What
+# keeps secrets out of image layers is that no `COPY <path>` from the context
+# exists at all. Excluding .env below is defence in depth against that changing.
 #
 # Add an exception here if you ever introduce a real `COPY <path>` from disk.
 

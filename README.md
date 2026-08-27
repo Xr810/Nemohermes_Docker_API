@@ -1,70 +1,198 @@
-# NemoHermes — Release Package
+# NemoHermes — Docker Release Package
 
-Docker release package for the Hermes agent sandbox (NVIDIA OpenShell +
-NemoClaw). The container exposes the OpenAI-compatible Hermes API, so an Open
-WebUI running on another device can connect to it.
+Runs the **Hermes agent sandbox** (NVIDIA OpenShell + NemoClaw) inside a single
+Docker container and publishes its OpenAI-compatible API on the host, so any
+OpenAI-compatible client — Open WebUI, a script, `curl` — can talk to it.
 
-**This package is the Docker path only.** The bare-metal Ubuntu installer
-(`deploy.sh`, `01-infra.sh` and friends) lives in the source repository, not
-here.
+**Scope: the Docker path only.** The bare-metal Ubuntu installer (`deploy.sh`,
+`01-infra.sh` … `05-verify.sh`, `config.env`, `resources/`) lives in the source
+repository, not here. Nothing in this folder reads or needs it.
 
-All configuration is in `.env`. The image holds no configuration and no secret,
-so changing the key or the model never requires a rebuild.
+| Document | Read it for |
+|---|---|
+| `README.md` (this file) | Build it, run it, verify it, what you actually get |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Why the container is built this way, self-healing, start-up troubleshooting |
+| [OPERATIONS.md](OPERATIONS.md) | Day-two work: switching model/provider, MCP servers, logs |
 
-> `.env`, `.env.example` and `.dockerignore` start with a dot and are hidden by
-> default. Use `ls -la` in a terminal, or press `Cmd + Shift + .` in Finder.
+---
+
+## Contents
+
+- [What you get](#what-you-get)
+- [Requirements](#requirements)
+- [Build from source](#build-from-source)
+- [Configure](#configure)
+- [Run](#run)
+- [Verify it is actually serving](#verify-it-is-actually-serving)
+- [Connect Open WebUI on another device](#connect-open-webui-on-another-device)
+- [Inside the container](#inside-the-container)
+- [Configuration reference](#configuration-reference)
+- [Rebuilding and shipping a tar](#rebuilding-and-shipping-a-tar)
+- [Common commands](#common-commands)
+- [Repository layout](#repository-layout)
+- [Security](#security)
+
+---
+
+## What you get
+
+One image, `nemohermes:local`, roughly **190 MB** compressed as a tar. It
+contains Ubuntu 24.04, systemd, a Docker engine, and a bootstrap script — and
+deliberately **no configuration, no credentials, and no Hermes sandbox**.
+
+What is in the image, and what only appears at run time, is the single most
+confusing thing about this package, so it is worth being explicit:
+
+| | Baked into the image at build time | Created on first `up`, kept in a volume |
+|---|---|---|
+| Base OS | Ubuntu 24.04 | — |
+| Init | systemd as PID 1, unit files, masks | — |
+| Inner engine | `docker.io` + `docker-buildx` packages | `/var/lib/docker` contents |
+| Bootstrap | `/usr/local/sbin/nemohermes` + its systemd unit | — |
+| OpenShell / NemoClaw CLI | ✗ — needs a live Docker engine, which does not exist during build | Downloaded from `nvidia.com`, installed into `/root/bin` |
+| Hermes sandbox | ✗ | Built by the gateway as a **child container** |
+| Sandbox base images | ✗ | Pulled from GHCR |
+| Your API key, model, endpoint | ✗ **never** | Injected from `.env` at container start |
+
+The consequences follow from that table:
+
+- **The image is byte-identical on every machine.** It holds nothing
+  machine-specific, so it is safe to `docker save` and hand to someone else.
+- **Changing the key, model, endpoint or sandbox name is not a rebuild.** It is
+  an `.env` edit plus `docker compose up -d`.
+- **The first start needs network and takes a while** — it installs the CLI,
+  pulls two base images, and builds an 84-layer sandbox image. Later starts skip
+  all of it.
+
+### Request path
+
+```text
+Open WebUI / curl on another device
+  └─ http://<this-host-ip>:8642/v1          published by compose
+     └─ openshell forward → sandbox :18642
+        └─ Hermes API server (in the sandbox container)
+           └─ OpenShell gateway inference layer
+              └─ your provider (OpenAI-compatible endpoint) → your model
+```
+
+> **Always send the model name `hermes-agent`.** The `INFERENCE_MODEL` value
+> from `.env` is what the gateway forwards upstream; it is not a model name this
+> API exposes.
+
+---
 
 ## Requirements
 
 | Item | Requirement |
 |---|---|
-| Runtime | Docker Engine, Docker Desktop, or OrbStack. Needs `privileged` (systemd + inner dockerd) |
+| Runtime | Docker Engine, Docker Desktop, or OrbStack. Must allow `privileged` containers |
 | Commands | `docker` and `docker compose` (v2+) |
-| Network, first start | `nvidia.com` for the CLI install, GHCR for the sandbox base images, plus your inference endpoint |
-| Inference | OpenAI-compatible base URL + model name + API key |
-| MCP (optional) | Public HTTPS MCP Router URL + token |
+| Disk | ~2 GB after the first start (wrapper image + sandbox images + inner engine state) |
+| Network, first start | `nvidia.com` (CLI install), `ghcr.io` (sandbox base images), plus your inference endpoint |
+| Network, later starts | Your inference endpoint only |
+| Inference | An OpenAI-compatible base URL + model name + API key |
+| MCP (optional) | A public HTTPS MCP Router URL + token |
 
-The inference endpoint must resolve over real DNS. A local proxy in fake-ip mode
-(Surge/Clash, `198.18.x.x`) makes the onboard probe fail; the entrypoint detects
-this and stops with an explanation instead of failing obscurely later.
+`privileged: true` is not optional here: systemd as PID 1 and the inner Docker
+engine both need cgroup and network-admin capabilities. See
+[ARCHITECTURE.md](ARCHITECTURE.md#how-the-container-works) for why there is no
+unprivileged variant.
 
-## Quick start
+The inference endpoint must resolve over **real DNS**. A local proxy in fake-ip
+mode (Surge/Clash, `198.18.x.x`) makes the onboard probe fail; the bootstrap
+detects this and stops with an explanation rather than failing obscurely later.
+
+> `.env`, `.env.example`, `.dockerignore` and `.gitignore` start with a dot and
+> are hidden by default. Use `ls -la` in a terminal, or press `Cmd + Shift + .`
+> in Finder.
+
+---
+
+## Build from source
+
+This repository ships **source only** — there is no image tar in it. Build the
+image first:
 
 ```bash
-cd /path/to/Nemohermes_Docker_Deployment
-docker load -i nemohermes-local.tar
+git clone https://github.com/Xr810/Nemohermes_Docker_Deployment.git
+cd Nemohermes_Docker_Deployment
+docker compose build
+```
+
+That takes a few minutes and produces `nemohermes:local`. It needs network for
+the Ubuntu base image and the `apt` packages, and nothing else — no credentials
+are involved, and `.env` does not have to exist yet.
+
+You can skip this step entirely: `docker compose up -d` builds the image
+automatically when it is missing. Building first just separates "did the image
+build?" from "did the deployment come up?", which makes the first run far easier
+to debug.
+
+If someone handed you a prebuilt `nemohermes-local.tar`, load it instead of
+building — see [Rebuilding and shipping a tar](#rebuilding-and-shipping-a-tar).
+
+---
+
+## Configure
+
+```bash
 cp .env.example .env
-# edit .env: at minimum INFERENCE_BASE_URL, INFERENCE_MODEL, INFERENCE_API_KEY
+```
+
+Then edit `.env` and fill in at least these three:
+
+```bash
+INFERENCE_BASE_URL=https://your-endpoint/v1
+INFERENCE_MODEL=your-model-name
+INFERENCE_API_KEY=your-key
+```
+
+Compose **requires** `.env` to exist and refuses to start without it. It does
+**not** check that the values are filled in, so an empty `INFERENCE_API_KEY`
+lets the container start and then fail minutes later inside onboard. There is no
+fallback key in the image.
+
+`.env.example` documents every supported variable; the
+[configuration reference](#configuration-reference) below summarises the ones
+that matter.
+
+---
+
+## Run
+
+```bash
 docker compose up -d
 ```
 
-Loading the tar is an optimisation, not a requirement. Compose reuses that image
-if it is present and builds the same image from the `Dockerfile` if it is not —
-see [Rebuilding](#rebuilding).
-
-The first start still needs network: the container installs the OpenShell /
-NemoClaw CLI and its inner dockerd pulls the sandbox base images. Neither is in
-the tar. Later starts skip both.
-
-Watch the bootstrap. The workload is a systemd unit rather than PID 1, so
-`docker compose logs` is usually empty:
+Then watch the bootstrap. The workload runs as a systemd unit rather than PID 1,
+so `docker compose logs` is usually **empty** — read the journal instead:
 
 ```bash
 docker exec nemohermes journalctl -u nemohermes -f
 ```
 
 Expect the first start to take a while: it installs the CLI, pulls two base
-images and builds an 84-layer sandbox image. The healthcheck allows 15 minutes
-before reporting unhealthy.
+images, and builds an 84-layer sandbox image. The healthcheck allows **15
+minutes** before reporting `unhealthy`. Watch the journal before concluding that
+it hung.
+
+A healthy first start ends with lines like:
+
+```text
+[nemohermes] Hermes API  http://0.0.0.0:8642/v1
+[nemohermes] dashboard   http://0.0.0.0:18789/
+```
+
+---
 
 ## Verify it is actually serving
 
 `/health` returning 200 only proves the port forward is up. Send a real request
-to confirm the whole chain — forward, gateway, sandbox, inference endpoint:
+to exercise the whole chain — forward, gateway, sandbox, inference endpoint:
 
 ```bash
 KEY=$(docker compose exec -T nemohermes \
-        awk -F= '/^OPENAI_API_KEY=/{print $2}' /root/hermes-openai.env)
+        sed -n 's/^OPENAI_API_KEY=//p' /root/hermes-openai.env | tr -d '\r')
 
 curl -s -X POST http://127.0.0.1:8642/v1/chat/completions \
   -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -73,18 +201,19 @@ curl -s -X POST http://127.0.0.1:8642/v1/chat/completions \
 
 A reply from `hermes-agent` means everything works.
 
-> Always send the model name **`hermes-agent`**, not the `INFERENCE_MODEL` value
-> from `.env`. The latter is what the gateway sends upstream; it is not a model
-> name this API exposes.
-
 | Interface | Address |
 |---|---|
 | Hermes API | `http://127.0.0.1:8642/v1` (health at `/health`) |
 | Hermes dashboard | `http://127.0.0.1:18789/` |
 
+---
+
 ## Connect Open WebUI on another device
 
-Read the connection file (base URL + API key):
+Open WebUI is **not** installed in this image. Point a remote instance at the
+Hermes API.
+
+Read the generated connection file (base URL + API key):
 
 ```bash
 docker compose exec nemohermes cat /root/hermes-openai.env
@@ -92,97 +221,182 @@ docker compose exec nemohermes cat /root/hermes-openai.env
 
 On the other device, open Open WebUI → **Admin → Settings → Connections →
 OpenAI**. Set the base URL to `http://<this-host-ip>:8642/v1` — this machine's
-LAN IP, not `127.0.0.1` — and paste the `OPENAI_API_KEY`. The Open WebUI
+LAN IP, **not** `127.0.0.1` — and paste the `OPENAI_API_KEY`. The Open WebUI
 **server**, not the browser, must be able to reach this host on `8642`.
 
-That key is the sandbox Hermes `API_SERVER_KEY`, not your inference provider
+That key is the sandbox's Hermes `API_SERVER_KEY`, not your inference provider
 key. Do not expose `8642` to the public internet without TLS.
 
-## Configuration
+---
 
-Everything runtime lives in `.env`. Apply a change with:
+## Inside the container
 
-```bash
-docker compose up -d
+Useful to know before you debug anything, because almost nothing is where a
+single-process container would put it.
+
+```text
+nemohermes  (privileged wrapper container)
+│
+├─ PID 1  /lib/systemd/systemd
+│  ├─ docker.service ................ inner dockerd (the "child" engine)
+│  ├─ user@0.service ................ root's systemd user manager
+│  │  └─ nemoclaw-openshell-gateway.service   ← the gateway, loopback-only
+│  └─ nemohermes.service ............ /usr/local/sbin/nemohermes  (bootstrap)
+│
+├─ inner dockerd owns:
+│  └─ the Hermes sandbox container    ← `docker compose exec nemohermes docker ps`
+│                                       never the host's `docker ps`
+│
+├─ /root ............................ volume `nemohermes-home`
+│  ├─ bin/ .......................... openshell, openshell-sandbox, openshell-gateway
+│  ├─ .nemoclaw/ .................... NemoClaw state, lifecycle locks
+│  ├─ .config/openshell/gateway.env . gateway bind address + supervisor path
+│  ├─ .local/state/nemoclaw/ ........ gateway TLS/PKI
+│  └─ hermes-openai.env ............. generated base URL + API key
+│
+├─ /var/lib/docker .................. volume `nemohermes-docker` (inner images)
+├─ /usr/local/sbin/nemohermes ....... bootstrap script (baked into the image)
+└─ /run, /run/lock .................. tmpfs.  /tmp deliberately is NOT
 ```
 
-`.env.example` documents every supported variable. The common ones:
+Two things trip people up constantly:
 
-| Variable | Purpose |
-|---|---|
-| `INFERENCE_BASE_URL` / `INFERENCE_MODEL` / `INFERENCE_API_KEY` | Required. Upstream inference endpoint |
-| `SANDBOX_NAME` | Sandbox onboard creates. 1–19 chars, lowercase letters/digits/single hyphens, must start with a letter |
-| `APPROVALS_MODE` | `off` / `smart` / `manual`; empty skips the approvals step |
-| `MCP_URL` / `MCP_ROUTER_TOKEN` | Optional public HTTPS MCP Router; empty `MCP_URL` skips MCP |
-| `HERMES_API_PORT` / `HERMES_DASHBOARD_PORT` | Same port number inside and outside the container |
+1. **Sandboxes are children, not siblings.** They are created by the *inner*
+   dockerd, so they appear in `docker compose exec nemohermes docker ps` and
+   never in the host's `docker ps`.
+2. **`docker compose logs` is empty by design.** The workload is a systemd unit;
+   its output goes to the journal.
 
-Compose requires `.env` to exist and refuses to start without it. It does **not**
-check that the values are filled in, so an empty `INFERENCE_API_KEY` lets the
-container start and then fails minutes later inside onboard. There is no
-fallback key in the image.
+The bootstrap script does far more than start things — on every boot it
+reconciles the state NemoClaw leaves behind after an interrupted run (stale
+locks, half-written PKI, errored sandboxes, drifted unit paths). That is
+documented in [ARCHITECTURE.md](ARCHITECTURE.md#self-healing-on-start).
 
-## Rebuilding
+---
 
-Only needed after editing the `Dockerfile` — its RUN layers or the entrypoint
-script. Changing the key, model or sandbox name is a config change, not a
-rebuild.
+## Configuration reference
+
+Everything runtime lives in `.env`. Apply any change with `docker compose up -d`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `INFERENCE_BASE_URL` | — | **Required.** OpenAI-compatible endpoint |
+| `INFERENCE_MODEL` | — | **Required.** Model the gateway sends upstream |
+| `INFERENCE_API_KEY` | — | **Required.** Your provider key |
+| `SANDBOX_NAME` | `main` | 1–19 chars, lowercase letters/digits/single hyphens, must start with a letter |
+| `APPROVALS_MODE` | `manual` | `off` / `smart` / `manual`; empty skips the approvals step |
+| `MCP_URL` / `MCP_ROUTER_TOKEN` | empty | Optional public HTTPS MCP Router; empty `MCP_URL` skips MCP entirely |
+| `HERMES_API_PORT` / `HERMES_DASHBOARD_PORT` | `8642` / `18789` | Same port number inside and outside the container |
+
+`.env.example` carries the full list, including the rarely-changed timeouts and
+GPU override. The complete table with defaults is in
+[ARCHITECTURE.md](ARCHITECTURE.md#configuration).
+
+---
+
+## Rebuilding and shipping a tar
+
+Rebuild only after editing the `Dockerfile` — its `RUN` layers or the embedded
+bootstrap script. Changing the key, model or sandbox name is a config change:
 
 ```bash
 docker compose up -d --build
 ```
 
-There is one Compose file and it handles both cases:
+There is one Compose file and it handles every case, because `build:` and
+`image:` together resolve the way this package needs:
 
 | Situation | Result |
 |---|---|
-| Image present, `up` | Reuses it. No build, no registry pull, even if the `Dockerfile` changed |
+| Image present, `up` | Reuses it. No build, no registry pull, even if the `Dockerfile` changed since |
 | Image present, `up --build` | Rebuilds and replaces the tag |
 | Image missing, `up` | Builds from this `Dockerfile`. No attempt to pull `nemohermes:local` |
 
-Avoid `--no-build`: it is the one path that tries a registry pull and then fails
-with `No such image: nemohermes:local`.
+Avoid `--no-build`: it is the one path that *does* attempt a registry pull, and
+it fails with `No such image: nemohermes:local` — that tag exists in no
+registry.
 
-To reship the result to another machine:
+To ship the built image to a machine that cannot build:
 
 ```bash
 docker compose build
-docker save -o nemohermes-local.tar nemohermes:local
+docker save -o nemohermes-local.tar nemohermes:local     # ~190 MB
 ```
+
+On the target machine, put the tar next to this folder and load it before
+starting:
+
+```bash
+docker load -i nemohermes-local.tar
+docker compose up -d
+```
+
+The tar is an optimisation, not a requirement — without it the first `up` builds
+the same image locally. It is also **not committed to this repository**
+(`.gitignore` excludes `*.tar`), so a fresh clone always builds.
+
+Note that loading the tar does not make the first start offline: the CLI install
+and the sandbox base images are not in it.
+
+---
 
 ## Common commands
 
 ```bash
 docker compose ps
 docker exec nemohermes journalctl -u nemohermes -f    # bootstrap log
-docker compose restart
-docker compose down          # stop; named volumes (CLI, sandbox images) stay
-docker compose down -v       # wipe the volumes; next start is a first start
+docker compose restart                                # re-bind forwards, skip onboard
+docker compose down                                   # stop; named volumes stay
+docker compose down -v                                # wipe volumes; next start is a first start
 docker compose exec nemohermes docker ps              # inner sandbox containers
 docker compose exec nemohermes bash                   # shell inside the wrapper
 ```
 
-Sandboxes are created by the **inner** dockerd and never appear in the host's
-`docker ps`.
+---
 
-## Files
+## Repository layout
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
-| `nemohermes-local.tar` | Prebuilt wrapper image, ~190 MB, tagged `nemohermes:local`. No secrets |
-| `docker-compose.yml` | The only Compose file: runs the image and rebuilds it. Carries the rationale for every runtime setting |
-| `Dockerfile` | Image definition: systemd, inner dockerd, and the embedded bootstrap script |
-| `.dockerignore` | Build context exclusions, including the image tar and `.env` |
-| `.env.example` | Configuration template. Shareable |
-| `.env` | Live configuration for this machine. **Contains credentials — do not share or commit** |
-| `README.md` | This file, the entry point |
-| `README-full.md` | Full reference: container architecture, self-healing, troubleshooting |
-| `OPERATIONS.md` | Day-two operations: changing model/provider, managing MCP, reading logs |
+| `Dockerfile` | The whole image: packages, systemd as PID 1, inner dockerd, and the bootstrap script embedded as a heredoc. No configuration, no secrets |
+| `docker-compose.yml` | The only Compose file — it both runs the image and rebuilds it. Carries the rationale for every runtime setting |
+| `.env.example` | Configuration template documenting every supported variable. Shareable |
+| `.env` | Your live configuration. **Contains credentials — never commit or share.** Not in the repository |
+| `.dockerignore` | Keeps the build context near-empty (see below). Not shipped inside the image |
+| `.gitignore` | Excludes `.env`, `*.tar` and editor/OS noise from git |
+| `README.md` | This file: build, run, verify |
+| `ARCHITECTURE.md` | How the container works and why; self-healing; start-up troubleshooting |
+| `OPERATIONS.md` | Day-two operations |
+
+**What `.dockerignore` is for.** When you run `docker compose build`, Docker
+tars up this folder and ships it to the daemon as the *build context* — before
+reading a single instruction. The `Dockerfile` here creates every file it needs
+with heredoc `COPY`, and reads nothing from disk, so that upload is pure waste.
+`.dockerignore` shrinks it to almost nothing, which matters most when a ~190 MB
+`nemohermes-local.tar` is sitting in the folder: without it, that tar is
+re-uploaded to the daemon on every build.
+
+It also excludes `.env` as defence in depth. Note that this is *not* what keeps
+your key out of the image — nothing is ever `COPY`d from the context, so no
+context file can reach a layer regardless. Add an exception to `.dockerignore`
+only if you ever introduce a real `COPY <path>` from disk.
+
+---
 
 ## Security
 
-`.env` holds your inference API key and MCP token. `.dockerignore` keeps it out
-of the build context, so no secret reaches an image layer and
-`nemohermes-local.tar` is safe to distribute. Do not hand out the folder itself
-with `.env` in it, and keep it off shared drives — share `.env.example` instead.
-
-If you ever run `git init` here, add `.env` and `*.tar` to `.gitignore` first.
+- `.env` holds your inference API key and MCP token. It is excluded from git
+  (`.gitignore`) and from the build context (`.dockerignore`), and no `COPY`
+  reads from the context, so **no secret can reach an image layer** —
+  `nemohermes-local.tar` is safe to distribute.
+- Do not hand out the *folder* with a filled-in `.env` in it, and keep it off
+  shared drives. Share `.env.example` instead.
+- The container is **privileged**. It does not use the host Docker engine and
+  does not bind the host's `/root`, but "isolated from the host engine" is not
+  "an unprivileged sandbox". Run it on a host you trust.
+- The Hermes API on `8642` is protected only by the sandbox's `API_SERVER_KEY`.
+  Do not expose it to the public internet without TLS. To restrict it to this
+  machine, change the compose `ports` bind to `127.0.0.1:8642:8642`.
+- The OpenShell gateway is deliberately **not** exposed. It listens on loopback
+  only, reachable from sandbox containers through a single DNAT rule — see
+  [ARCHITECTURE.md](ARCHITECTURE.md#the-gateway-is-reachable-not-exposed).
