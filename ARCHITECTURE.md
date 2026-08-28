@@ -17,7 +17,7 @@ reading logs — are in [OPERATIONS.md](OPERATIONS.md).
 - [What this deploys](#what-this-deploys)
 - [How the container works](#how-the-container-works)
 - [Self-healing on start](#self-healing-on-start)
-- [Migrating from the old host-socket layout](#migrating-from-the-old-host-socket-layout)
+- [Migrating from the old layout](#migrating-from-the-old-layout)
 - [Troubleshooting start-up](#troubleshooting-start-up)
 
 ## What this deploys
@@ -201,7 +201,7 @@ If the MCP host resolves into `198.18.0.0/15` — a proxy in fake-ip mode —
 fatal: it is optional, and a failure there must not leave the Hermes API
 unreachable when onboard, approvals and the sandbox all succeeded.
 
-## Migrating from the old host-socket layout
+## Migrating from the old layout
 
 If you previously ran a compose file that bound `/var/run/docker.sock` and
 `/root:/root`:
@@ -233,4 +233,5 @@ If you previously ran a compose file that bound `/var/run/docker.sock` and
 | First start seems stuck | It builds an 84-layer sandbox image. The healthcheck allows 15 minutes; watch the journal before concluding it hung |
 
 These are start-up and onboard failures. Day-two problems — the model, MCP,
-approvals, a dead forward — are in [OPERATIONS.md](OPERATIONS.md#troubleshooting).
+approvals, a dead forward — are in
+[OPERATIONS.md](OPERATIONS.md#troubleshooting).
