@@ -9,9 +9,8 @@ OpenAI-compatible client — Open WebUI, a script, `curl` — can talk to it.
 repository, not here. Nothing in this folder reads or needs it.
 
 This package does not install Open WebUI either — it publishes an API and
-expects you to bring a client. If you want the chat UI bundled and installed
-for you, use [nemohermes-chat](https://github.com/Xr810/nemohermes-chat)
-instead.
+expects you to bring a client. The companion package `nemohermes-chat` is the
+same wrapper with Open WebUI bundled and installed for you.
 
 | Document | Read it for |
 |---|---|
