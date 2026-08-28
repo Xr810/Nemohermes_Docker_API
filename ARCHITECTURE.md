@@ -4,10 +4,12 @@ How the container is built, why it is built that way, and what to do when it
 misbehaves. Start with [README.md](README.md) to build and run it; this document
 is the reference behind it.
 
-**Scope: the Docker path only.** This package contains no bare-metal installer.
-The Ubuntu path (`deploy.sh`, `01-infra.sh` … `05-verify.sh`, `lib.sh`,
-`config.env`, `resources/`) and the in-sandbox Open WebUI install live in the
-source repository, not here. Nothing in this folder reads or needs them.
+**Scope: the Docker path only.** This package contains no bare-metal installer —
+the Ubuntu path (`deploy.sh`, `01-infra.sh` … `05-verify.sh`, `lib.sh`,
+`config.env`, `resources/`) lives in the source repository. It also does not
+install Open WebUI: that variant is
+[nemohermes-chat](https://github.com/Xr810/nemohermes-chat), which installs it
+inside the sandbox. Nothing in this folder reads or needs either.
 
 Day-two operations — changing the model or provider, adding MCP servers,
 reading logs — are in [OPERATIONS.md](OPERATIONS.md).

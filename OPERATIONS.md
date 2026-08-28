@@ -35,7 +35,7 @@ Two kinds of commands appear below.
 Host commands run in this folder, next to `docker-compose.yml`:
 
 ```bash
-cd /path/to/Nemohermes_Docker_Deployment
+cd /path/to/nemohermes-api
 ```
 
 Container commands are the `openshell` / `nemoclaw` CLI, which exists only

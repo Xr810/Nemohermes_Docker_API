@@ -8,6 +8,11 @@ OpenAI-compatible client — Open WebUI, a script, `curl` — can talk to it.
 `01-infra.sh` … `05-verify.sh`, `config.env`, `resources/`) lives in the source
 repository, not here. Nothing in this folder reads or needs it.
 
+This package does not install Open WebUI either — it publishes an API and
+expects you to bring a client. If you want the chat UI bundled and installed
+for you, use [nemohermes-chat](https://github.com/Xr810/nemohermes-chat)
+instead.
+
 | Document | Read it for |
 |---|---|
 | `README.md` (this file) | Build it, run it, verify it, what you actually get |
@@ -117,14 +122,12 @@ This repository ships **source only** — there is no image tar in it. Build the
 image first:
 
 ```bash
-git clone https://github.com/Xr810/Nemohermes_Docker_Deployment.git
-cd Nemohermes_Docker_Deployment
 docker compose build
 ```
 
-That takes a few minutes and produces `nemohermes-api:local`. It needs network for
-the Ubuntu base image and the `apt` packages, and nothing else — no credentials
-are involved, and `.env` does not have to exist yet.
+That takes a few minutes and produces `nemohermes-api:local`. It needs network
+for the Ubuntu base image and the `apt` packages, and nothing else — no
+credentials are involved, and `.env` does not have to exist yet.
 
 You can skip this step entirely: `docker compose up -d` builds the image
 automatically when it is missing. Building first just separates "did the image
