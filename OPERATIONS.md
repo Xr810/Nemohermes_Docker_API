@@ -320,12 +320,13 @@ A sandbox container in `restarting` state almost always means config drift.
 | Sandbox container restarts in a loop | Config drift. Re-apply `APPROVALS_MODE` via `docker compose up -d`, and check `nemoclaw <sandbox> logs --tail 50` |
 | Edited Hermes config by hand | Re-apply through `docker compose up -d` (or `openshell inference set`) to restore a consistent, anchored state |
 | Dashboard or API port not answering | Check `openshell -g nemoclaw forward list` first — the app is usually running and only the tunnel died. `docker compose restart` recreates them |
-| Other device cannot reach `:8642` | Use this machine's LAN IP, not `127.0.0.1`; allow the port on the host firewall |
+| Other device cannot reach `:8642` | Use this machine's LAN IP, not `127.0.0.1`; published ports need the process to listen on `0.0.0.0` (compose sets `FORWARD_BIND`); allow the port on the host firewall |
+| `/health` returns 200 but chat fails | The forward is up and the chain is not. Run the `chat/completions` check in [README.md](README.md#verify-it-is-actually-serving) |
 | `docker compose logs` empty | Expected. Use `docker exec nemohermes-api journalctl -u nemohermes -f` |
 
 For start-up and onboard failures — inner dockerd, the user manager, the gateway
 bridge route, stale locks — see
-[ARCHITECTURE.md](ARCHITECTURE.md#troubleshooting).
+[ARCHITECTURE.md](ARCHITECTURE.md#troubleshooting-start-up).
 
 ## Escape hatch
 

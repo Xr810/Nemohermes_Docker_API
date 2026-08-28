@@ -15,15 +15,10 @@ reading logs — are in [OPERATIONS.md](OPERATIONS.md).
 ## Contents
 
 - [What this deploys](#what-this-deploys)
-- [Requirements](#requirements)
-- [Configuration](#configuration)
 - [How the container works](#how-the-container-works)
 - [Self-healing on start](#self-healing-on-start)
-- [Access points](#access-points)
-- [Lifecycle](#lifecycle)
-- [Rebuilding and reshipping](#rebuilding-and-reshipping)
-- [Troubleshooting](#troubleshooting)
-- [Package layout](#package-layout)
+- [Migrating from the old host-socket layout](#migrating-from-the-old-host-socket-layout)
+- [Troubleshooting start-up](#troubleshooting-start-up)
 
 ## What this deploys
 
@@ -46,68 +41,6 @@ Hermes API instead.
 Requests to that API always use the model name `hermes-agent`. The model in
 `.env` (`INFERENCE_MODEL`) is what the gateway sends upstream, and is not
 exposed as a model name on this API.
-
-## Requirements
-
-| Item | Requirement |
-|---|---|
-| Runtime | Docker Engine, Docker Desktop, or OrbStack |
-| Privileges | `privileged: true` — systemd plus inner dockerd. No host `docker.sock`, no bind of the host's `/root`; see [How the container works](#how-the-container-works) |
-| Commands | `docker` and `docker compose` (v2+) |
-| Network, first start | `nvidia.com` for the CLI install, GHCR for the sandbox base images, plus your inference endpoint |
-| Network, later starts | Your inference endpoint only |
-| Inference | OpenAI-compatible base URL + model name + API key |
-| MCP (optional) | Public HTTPS MCP Router URL + token |
-
-The inference endpoint must resolve over real DNS. A local proxy in fake-ip mode
-(Surge/Clash, `198.18.x.x`) makes the onboard probe fail; the entrypoint detects
-this and stops with an explanation rather than failing obscurely later.
-
-Do not point the base URL at `https://inference.local/v1`. That name exists only
-inside the sandbox and the onboard probe will fail.
-
-## Configuration
-
-Everything lives in `.env`; the image holds none of it. Changing the key, the
-model or the sandbox name is `docker compose up -d` — never a rebuild. Rebuild
-only after the `Dockerfile` RUN layers or the entrypoint change.
-
-No secret can reach an image layer: the `Dockerfile` creates every file it
-needs with heredoc `COPY` and never `COPY`s from the build context, and
-`.dockerignore` excludes `.env` from that context as defence in depth. So
-`nemohermes-api:local` is safe to `docker save` and copy to another machine.
-
-Compose **requires** `.env` to exist and refuses to start without it, rather than
-failing minutes later inside onboard. It does not check that the values are
-filled in, so an empty `INFERENCE_API_KEY` still fails late. There is no
-fallback key in the image.
-
-`.env.example` documents every supported variable. Summary:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `INFERENCE_BASE_URL` | — | Required. OpenAI-compatible endpoint |
-| `INFERENCE_MODEL` | — | Required. Model the gateway sends upstream |
-| `INFERENCE_API_KEY` | — | Required. Provider key |
-| `SANDBOX_NAME` | `main` | Sandbox onboard creates. 1–19 chars, lowercase letters/digits/single hyphens, must start with a letter |
-| `APPROVALS_MODE` | `manual` | `off` / `smart` / `manual`; empty skips the approvals step |
-| `MCP_URL` | empty | Public HTTPS MCP Router; empty skips MCP |
-| `MCP_ROUTER_TOKEN` | empty | Required when `MCP_URL` is set |
-| `MCP_ENV_VAR` | `MCP_ROUTER_TOKEN` | Name of the OpenShell credential, not the token |
-| `AGENT` | `hermes` | Agent runtime; keep as is |
-| `HERMES_API_PORT` | `8642` | Same number inside and out |
-| `HERMES_DASHBOARD_PORT` | `18789` | Same number inside and out |
-| `FORWARD_BIND` | `0.0.0.0` (set by compose) | Address the in-container forwards bind |
-| `SANDBOX_PULL_IMAGES` | empty | Extra images to pull if missing, space-separated |
-| `NEMOCLAW_SANDBOX_GPU` | unset | Unset is correct; see [GPU passthrough](#gpu-passthrough) |
-| `ONBOARD_FRESH` | `0` | `1` discards the onboard session; may re-resolve the base image |
-| `DOCKER_WAIT_SECS` | `90` | Wait for the inner engine |
-| `USER_MANAGER_WAIT_SECS` | `90` | Wait for `user@0.service` |
-| `SANDBOX_WAIT_SECS` | `180` | Wait for the sandbox to reach Ready |
-| `SANDBOX_READY_GRACE_SECS` | `8` | Grace period before deciding onboard is needed |
-
-`IN_CONTAINER=1` and `FORWARD_BIND=0.0.0.0` are set in the compose file rather
-than `.env`, so the image always knows it is the compose deployment.
 
 ## How the container works
 
@@ -216,6 +149,31 @@ after preflight reports no GPU and then fails the sandbox create — leaving the
 sandbox in `Error` phase, which also blocks the next run. An explicit value in
 `.env` always wins.
 
+### Configuration never enters the image
+
+Everything lives in `.env`; the image holds none of it. Changing the key, the
+model or the sandbox name is `docker compose up -d` — never a rebuild. Rebuild
+only after the `Dockerfile` RUN layers or the entrypoint change.
+
+No secret can reach an image layer: the `Dockerfile` creates every file it
+needs with heredoc `COPY` and never `COPY`s from the build context, and
+`.dockerignore` excludes `.env` from that context as defence in depth. So
+`nemohermes-api:local` is safe to `docker save` and copy to another machine.
+
+Compose **requires** `.env` to exist and refuses to start without it, rather than
+failing minutes later inside onboard. It does not check that the values are
+filled in, so an empty `INFERENCE_API_KEY` still fails late. There is no
+fallback key in the image.
+
+`IN_CONTAINER=1` and `FORWARD_BIND=0.0.0.0` are set in the compose file rather
+than `.env`, so the image always knows it is the compose deployment.
+
+The entrypoint is a heredoc inside the `Dockerfile`, so editing the bootstrap
+logic means editing the `Dockerfile` and rebuilding. The full variable
+reference is in [README.md](README.md#configuration-reference) and
+`.env.example`; rebuilding and shipping a tar is in
+[README.md](README.md#rebuilding-and-shipping-a-tar).
+
 ## Self-healing on start
 
 A run interrupted partway leaves state that wedges every later run, and NemoClaw
@@ -243,54 +201,7 @@ If the MCP host resolves into `198.18.0.0/15` — a proxy in fake-ip mode —
 fatal: it is optional, and a failure there must not leave the Hermes API
 unreachable when onboard, approvals and the sandbox all succeeded.
 
-## Access points
-
-| Interface | Address | Notes |
-|---|---|---|
-| Hermes API | `http://<this-host-ip>:8642/v1` | OpenAI-compatible; health at `/health`; model name is `hermes-agent` |
-| Hermes dashboard | `http://<this-host-ip>:18789/` | Agent sessions, skills, approvals |
-| OpenShell TUI | `docker compose exec nemohermes openshell term` | Sandboxes, providers, live egress approvals; `q` quits |
-| Hermes TUI | `docker compose exec nemohermes nemoclaw <sandbox> exec -- hermes dashboard --tui` | The dashboard without a browser |
-
-Inside the sandbox the API binds `18642` and the dashboard binds its own port;
-neither is reachable as a host address. Only the published `8642` and `18789`
-are.
-
-To restrict the API to this machine, change the compose `ports` bind, for
-example `127.0.0.1:8642:8642`. Do not expose `8642` to the public internet
-without TLS.
-
-### Connect Open WebUI on another device
-
-1. Wait until the journal shows the Hermes API URL.
-2. On this machine, read the connection file (base URL + API key):
-
-   ```bash
-   docker compose exec nemohermes cat /root/hermes-openai.env
-   ```
-
-3. On the other device: Open WebUI → **Admin → Settings → Connections →
-   OpenAI**. Base URL is `http://<this-host-ip>:8642/v1`, key is the
-   `OPENAI_API_KEY` from that file. The Open WebUI **server** — not the browser —
-   must be able to reach this host on `8642`.
-
-The API key is the sandbox Hermes `API_SERVER_KEY`, not your inference provider
-key.
-
-## Lifecycle
-
-```bash
-docker compose up -d            # start; first run installs the CLI and onboards
-docker compose restart          # re-bind forwards; skips onboard
-docker compose down             # stop the wrapper; named volumes stay
-docker compose down -v          # wipe nemohermes-home and nemohermes-docker
-```
-
-`down` keeps the CLI and the sandbox images, so the next `up` is fast. `down -v`
-removes both volumes and the next start is a first start again, including the
-installer and the image pull.
-
-### Migrating from the old host-socket layout
+## Migrating from the old host-socket layout
 
 If you previously ran a compose file that bound `/var/run/docker.sock` and
 `/root:/root`:
@@ -304,42 +215,10 @@ If you previously ran a compose file that bound `/var/run/docker.sock` and
    `bin/openshell-*`). Leave the rest of `/root` alone.
 4. `docker compose up -d`. Named volumes start empty, so this is a first start.
 
-## Rebuilding and reshipping
-
-```bash
-docker compose up -d --build                          # rebuild and run
-docker compose build                                  # build only
-docker save -o nemohermes-api-local.tar nemohermes-api:local  # reship
-```
-
-One Compose file covers both running and rebuilding, because `build:` and
-`image:` together resolve the way this package needs:
-
-| Situation | Result |
-|---|---|
-| Image present, `up` | Reuses it. No build, no registry pull, even when the `Dockerfile` changed since |
-| Image present, `up --build` | Rebuilds and replaces the tag |
-| Image missing, `up` | Builds from the `Dockerfile`. No attempt to pull `nemohermes-api:local`, which exists in no registry |
-
-Loading a tar is therefore an optimisation, not a requirement — it just saves
-the first build, and no tar is committed to this repository (`.gitignore`
-excludes `*.tar`), so a fresh clone always builds. Avoid `--no-build`: it is the
-one path that does attempt a registry pull, and it fails with `No such image:
-nemohermes-api:local`.
-
-Loading a tar does not make the first start offline either: the CLI install and
-the sandbox base images are not in it.
-
-The entrypoint is a heredoc inside the `Dockerfile`, so editing the bootstrap
-logic means editing the `Dockerfile` and rebuilding. `.dockerignore` keeps the
-image tar, `.env` and the docs out of the build context; the Dockerfile creates
-every file it needs with heredoc `COPY` and reads nothing from the context.
-
-## Troubleshooting
+## Troubleshooting start-up
 
 | Symptom | Action |
 |---|---|
-| `docker compose logs` is empty | Expected — the workload is a systemd unit. Use `docker exec nemohermes-api journalctl -u nemohermes -f` |
 | Compose refuses to start, `env file ... not found` | `cp .env.example .env` and fill in the inference values |
 | Dies in `need_inference` | `INFERENCE_BASE_URL`, `INFERENCE_MODEL` and `INFERENCE_API_KEY` must all be non-empty in `.env` |
 | `resolves to fake-ip 198.18.x.x` | A local proxy is hijacking DNS. Disconnect it or exempt the domain |
@@ -351,27 +230,7 @@ every file it needs with heredoc `COPY` and reads nothing from the context.
 | `Timed out waiting for the sandbox mutation lock` | A lock from a dead generation the entrypoint judged live. Recreate the container; if it persists, `docker compose down` then `up -d` |
 | `already exists as OpenClaw` | A sandbox left in `Error` phase. The entrypoint clears these; if it persists, `docker compose exec nemohermes openshell -g nemoclaw sandbox delete <name>` |
 | Onboard fails at step 2/8 with a firewall warning | The gateway bridge route. Check the journal for `sandbox route:` and confirm `openshell-docker` exists in `docker compose exec nemohermes docker network ls` |
-| Sandbox container restarts in a loop | Config drift — see [OPERATIONS.md](OPERATIONS.md#approval-mode). Check `docker compose exec nemohermes nemoclaw <sandbox> logs --tail 50` |
-| `/health` returns 200 but chat fails | The forward is up and the chain is not. Run the `chat/completions` check in [README.md](README.md#verify-it-is-actually-serving) |
-| API returns a model error | Send `hermes-agent`, not the `INFERENCE_MODEL` value |
-| Other device cannot reach `:8642` | Use this machine's LAN IP, not `127.0.0.1`; published ports need the process to listen on `0.0.0.0` (compose sets `FORWARD_BIND`); allow the port on the host firewall |
-| MCP registration failed | Non-fatal by design. See [OPERATIONS.md](OPERATIONS.md#mcp-servers) |
 | First start seems stuck | It builds an 84-layer sandbox image. The healthcheck allows 15 minutes; watch the journal before concluding it hung |
 
-## Package layout
-
-| Path | Contents |
-|---|---|
-| `Dockerfile` | Packages, systemd as PID 1, inner dockerd, and the bootstrap script it runs (onboard, approvals, MCP, forwards, and the reconciliation above). No configuration, no secrets, no Open WebUI |
-| `docker-compose.yml` | The only Compose file: runs the image and rebuilds it with `--build`. Carries the full rationale for every runtime setting |
-| `.env.example` | Configuration template with every supported variable. Shareable |
-| `.env` | Live configuration for this machine. Contains credentials; not in the repository, and keep it off shared drives |
-| `.dockerignore` | Build context exclusions: any image tar, `.env`, the docs |
-| `.gitignore` | Excludes `.env`, `*.tar` and editor/OS noise from git |
-| `README.md` | Entry point: build, run, verify |
-| `ARCHITECTURE.md` | This file |
-| `OPERATIONS.md` | Day-two operations |
-
-The built image is `nemohermes-api:local` (~190 MB as a tar). It is produced by
-`docker compose build`, never committed here — see
-[Rebuilding and reshipping](#rebuilding-and-reshipping).
+These are start-up and onboard failures. Day-two problems — the model, MCP,
+approvals, a dead forward — are in [OPERATIONS.md](OPERATIONS.md#troubleshooting).

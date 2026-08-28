@@ -102,6 +102,9 @@ The inference endpoint must resolve over **real DNS**. A local proxy in fake-ip
 mode (Surge/Clash, `198.18.x.x`) makes the onboard probe fail; the bootstrap
 detects this and stops with an explanation rather than failing obscurely later.
 
+Do not point the base URL at `https://inference.local/v1`. That name exists only
+inside the sandbox and the onboard probe will fail.
+
 > `.env`, `.env.example`, `.dockerignore` and `.gitignore` start with a dot and
 > are hidden by default. Use `ls -la` in a terminal, or press `Cmd + Shift + .`
 > in Finder.
@@ -280,17 +283,29 @@ Everything runtime lives in `.env`. Apply any change with `docker compose up -d`
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `INFERENCE_BASE_URL` | — | **Required.** OpenAI-compatible endpoint |
-| `INFERENCE_MODEL` | — | **Required.** Model the gateway sends upstream |
-| `INFERENCE_API_KEY` | — | **Required.** Your provider key |
-| `SANDBOX_NAME` | `main` | 1–19 chars, lowercase letters/digits/single hyphens, must start with a letter |
+| `INFERENCE_BASE_URL` | — | Required. OpenAI-compatible endpoint |
+| `INFERENCE_MODEL` | — | Required. Model the gateway sends upstream |
+| `INFERENCE_API_KEY` | — | Required. Provider key |
+| `SANDBOX_NAME` | `main` | Sandbox onboard creates. 1–19 chars, lowercase letters/digits/single hyphens, must start with a letter |
 | `APPROVALS_MODE` | `manual` | `off` / `smart` / `manual`; empty skips the approvals step |
-| `MCP_URL` / `MCP_ROUTER_TOKEN` | empty | Optional public HTTPS MCP Router; empty `MCP_URL` skips MCP entirely |
-| `HERMES_API_PORT` / `HERMES_DASHBOARD_PORT` | `8642` / `18789` | Same port number inside and outside the container |
+| `MCP_URL` | empty | Public HTTPS MCP Router; empty skips MCP |
+| `MCP_ROUTER_TOKEN` | empty | Required when `MCP_URL` is set |
+| `MCP_ENV_VAR` | `MCP_ROUTER_TOKEN` | Name of the OpenShell credential, not the token |
+| `AGENT` | `hermes` | Agent runtime; keep as is |
+| `HERMES_API_PORT` | `8642` | Same number inside and out |
+| `HERMES_DASHBOARD_PORT` | `18789` | Same number inside and out |
+| `FORWARD_BIND` | `0.0.0.0` (set by compose) | Address the in-container forwards bind |
+| `SANDBOX_PULL_IMAGES` | empty | Extra images to pull if missing, space-separated |
+| `NEMOCLAW_SANDBOX_GPU` | unset | Unset is correct; see [GPU passthrough](ARCHITECTURE.md#gpu-passthrough) |
+| `ONBOARD_FRESH` | `0` | `1` discards the onboard session; may re-resolve the base image |
+| `DOCKER_WAIT_SECS` | `90` | Wait for the inner engine |
+| `USER_MANAGER_WAIT_SECS` | `90` | Wait for `user@0.service` |
+| `SANDBOX_WAIT_SECS` | `180` | Wait for the sandbox to reach Ready |
+| `SANDBOX_READY_GRACE_SECS` | `8` | Grace period before deciding onboard is needed |
 
-`.env.example` carries the full list, including the rarely-changed timeouts and
-GPU override. The complete table with defaults is in
-[ARCHITECTURE.md](ARCHITECTURE.md#configuration).
+`.env.example` carries the same list with inline comments. Why none of it is
+baked into the image is in
+[ARCHITECTURE.md](ARCHITECTURE.md#configuration-never-enters-the-image).
 
 ---
 
