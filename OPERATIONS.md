@@ -125,7 +125,7 @@ Inside the container the workload is a systemd unit, not PID 1, so
 `docker compose logs` is usually empty:
 
 ```bash
-docker exec nemohermes journalctl -u nemohermes -f      # bootstrap log
+docker exec nemohermes-api journalctl -u nemohermes -f      # bootstrap log
 docker compose exec nemohermes systemctl status nemohermes.service
 docker compose exec nemohermes systemctl status docker.service
 docker compose exec nemohermes systemctl --user status nemoclaw-openshell-gateway.service
@@ -284,7 +284,7 @@ docker compose exec nemohermes nemoclaw <sandbox> exec -- hermes config get appr
 ## Diagnostics
 
 ```bash
-docker exec nemohermes journalctl -u nemohermes -f              # bootstrap log
+docker exec nemohermes-api journalctl -u nemohermes -f              # bootstrap log
 docker compose exec nemohermes openshell -g nemoclaw sandbox list
 docker compose exec nemohermes nemoclaw <sandbox> doctor        # sandbox + gateway health
 docker compose exec nemohermes nemoclaw <sandbox> logs --tail 50
@@ -321,7 +321,7 @@ A sandbox container in `restarting` state almost always means config drift.
 | Edited Hermes config by hand | Re-apply through `docker compose up -d` (or `openshell inference set`) to restore a consistent, anchored state |
 | Dashboard or API port not answering | Check `openshell -g nemoclaw forward list` first — the app is usually running and only the tunnel died. `docker compose restart` recreates them |
 | Other device cannot reach `:8642` | Use this machine's LAN IP, not `127.0.0.1`; allow the port on the host firewall |
-| `docker compose logs` empty | Expected. Use `docker exec nemohermes journalctl -u nemohermes -f` |
+| `docker compose logs` empty | Expected. Use `docker exec nemohermes-api journalctl -u nemohermes -f` |
 
 For start-up and onboard failures — inner dockerd, the user manager, the gateway
 bridge route, stale locks — see

@@ -6,7 +6,7 @@
 # and uploads it to the daemon as the "build context". This Dockerfile creates
 # every file it needs with heredoc COPY and reads nothing from disk, so that
 # upload is pure waste -- and it is not free: a locally built
-# nemohermes-local.tar is ~190 MB, and without the rules below it would be
+# nemohermes-api-local.tar is ~190 MB, and without the rules below it would be
 # re-sent to the daemon on every single build.
 #
 # So this file is a build-speed optimisation, not a security control. What

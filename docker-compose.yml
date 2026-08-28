@@ -18,14 +18,14 @@
 #                                      even if the Dockerfile changed since.
 #   image present  + `up --build`   -> rebuilds and replaces the tag.
 #   image missing  + `up`           -> builds from this Dockerfile. It does not
-#                                      try to pull nemohermes:local, which
+#                                      try to pull nemohermes-api:local, which
 #                                      exists in no registry.
 #
-# If someone handed you a prebuilt tar, `docker load -i nemohermes-local.tar`
+# If someone handed you a prebuilt tar, `docker load -i nemohermes-api-local.tar`
 # before the first `up` and the build is skipped. That is an optimisation, not
 # a requirement. Do not use `--no-build`, which is the one path that does
 # attempt a registry pull and then fails with "No such image:
-# nemohermes:local".
+# nemohermes-api:local".
 #
 # The image carries no configuration. Every value comes from .env at container
 # start, so changing the key or the model is `docker compose up -d`, never a
@@ -43,8 +43,8 @@
 services:
   nemohermes:
     build: .
-    image: nemohermes:local
-    container_name: nemohermes
+    image: nemohermes-api:local
+    container_name: nemohermes-api
     restart: unless-stopped
 
     # ---- systemd as PID 1 + inner dockerd ----

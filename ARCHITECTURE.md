@@ -75,7 +75,7 @@ only after the `Dockerfile` RUN layers or the entrypoint change.
 No secret can reach an image layer: the `Dockerfile` creates every file it
 needs with heredoc `COPY` and never `COPY`s from the build context, and
 `.dockerignore` excludes `.env` from that context as defence in depth. So
-`nemohermes:local` is safe to `docker save` and copy to another machine.
+`nemohermes-api:local` is safe to `docker save` and copy to another machine.
 
 Compose **requires** `.env` to exist and refuses to start without it, rather than
 failing minutes later inside onboard. It does not check that the values are
@@ -131,7 +131,7 @@ Because the workload is a systemd unit rather than PID 1, `docker compose logs`
 is often empty. Read the journal instead:
 
 ```bash
-docker exec nemohermes journalctl -u nemohermes -f
+docker exec nemohermes-api journalctl -u nemohermes -f
 ```
 
 Consequences of systemd as PID 1: `privileged: true` (systemd and inner dockerd
@@ -309,7 +309,7 @@ If you previously ran a compose file that bound `/var/run/docker.sock` and
 ```bash
 docker compose up -d --build                          # rebuild and run
 docker compose build                                  # build only
-docker save -o nemohermes-local.tar nemohermes:local  # reship
+docker save -o nemohermes-api-local.tar nemohermes-api:local  # reship
 ```
 
 One Compose file covers both running and rebuilding, because `build:` and
@@ -319,13 +319,13 @@ One Compose file covers both running and rebuilding, because `build:` and
 |---|---|
 | Image present, `up` | Reuses it. No build, no registry pull, even when the `Dockerfile` changed since |
 | Image present, `up --build` | Rebuilds and replaces the tag |
-| Image missing, `up` | Builds from the `Dockerfile`. No attempt to pull `nemohermes:local`, which exists in no registry |
+| Image missing, `up` | Builds from the `Dockerfile`. No attempt to pull `nemohermes-api:local`, which exists in no registry |
 
 Loading a tar is therefore an optimisation, not a requirement — it just saves
 the first build, and no tar is committed to this repository (`.gitignore`
 excludes `*.tar`), so a fresh clone always builds. Avoid `--no-build`: it is the
 one path that does attempt a registry pull, and it fails with `No such image:
-nemohermes:local`.
+nemohermes-api:local`.
 
 Loading a tar does not make the first start offline either: the CLI install and
 the sandbox base images are not in it.
@@ -339,7 +339,7 @@ every file it needs with heredoc `COPY` and reads nothing from the context.
 
 | Symptom | Action |
 |---|---|
-| `docker compose logs` is empty | Expected — the workload is a systemd unit. Use `docker exec nemohermes journalctl -u nemohermes -f` |
+| `docker compose logs` is empty | Expected — the workload is a systemd unit. Use `docker exec nemohermes-api journalctl -u nemohermes -f` |
 | Compose refuses to start, `env file ... not found` | `cp .env.example .env` and fill in the inference values |
 | Dies in `need_inference` | `INFERENCE_BASE_URL`, `INFERENCE_MODEL` and `INFERENCE_API_KEY` must all be non-empty in `.env` |
 | `resolves to fake-ip 198.18.x.x` | A local proxy is hijacking DNS. Disconnect it or exempt the domain |
@@ -372,6 +372,6 @@ every file it needs with heredoc `COPY` and reads nothing from the context.
 | `ARCHITECTURE.md` | This file |
 | `OPERATIONS.md` | Day-two operations |
 
-The built image is `nemohermes:local` (~190 MB as a tar). It is produced by
+The built image is `nemohermes-api:local` (~190 MB as a tar). It is produced by
 `docker compose build`, never committed here — see
 [Rebuilding and reshipping](#rebuilding-and-reshipping).

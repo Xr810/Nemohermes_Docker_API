@@ -36,7 +36,7 @@ repository, not here. Nothing in this folder reads or needs it.
 
 ## What you get
 
-One image, `nemohermes:local`, roughly **190 MB** compressed as a tar. It
+One image, `nemohermes-api:local`, roughly **190 MB** compressed as a tar. It
 contains Ubuntu 24.04, systemd, a Docker engine, and a bootstrap script — and
 deliberately **no configuration, no credentials, and no Hermes sandbox**.
 
@@ -119,7 +119,7 @@ cd Nemohermes_Docker_Deployment
 docker compose build
 ```
 
-That takes a few minutes and produces `nemohermes:local`. It needs network for
+That takes a few minutes and produces `nemohermes-api:local`. It needs network for
 the Ubuntu base image and the `apt` packages, and nothing else — no credentials
 are involved, and `.env` does not have to exist yet.
 
@@ -128,7 +128,7 @@ automatically when it is missing. Building first just separates "did the image
 build?" from "did the deployment come up?", which makes the first run far easier
 to debug.
 
-If someone handed you a prebuilt `nemohermes-local.tar`, load it instead of
+If someone handed you a prebuilt `nemohermes-api-local.tar`, load it instead of
 building — see [Rebuilding and shipping a tar](#rebuilding-and-shipping-a-tar).
 
 ---
@@ -168,7 +168,7 @@ Then watch the bootstrap. The workload runs as a systemd unit rather than PID 1,
 so `docker compose logs` is usually **empty** — read the journal instead:
 
 ```bash
-docker exec nemohermes journalctl -u nemohermes -f
+docker exec nemohermes-api journalctl -u nemohermes -f
 ```
 
 Expect the first start to take a while: it installs the CLI, pulls two base
@@ -310,24 +310,24 @@ There is one Compose file and it handles every case, because `build:` and
 |---|---|
 | Image present, `up` | Reuses it. No build, no registry pull, even if the `Dockerfile` changed since |
 | Image present, `up --build` | Rebuilds and replaces the tag |
-| Image missing, `up` | Builds from this `Dockerfile`. No attempt to pull `nemohermes:local` |
+| Image missing, `up` | Builds from this `Dockerfile`. No attempt to pull `nemohermes-api:local` |
 
 Avoid `--no-build`: it is the one path that *does* attempt a registry pull, and
-it fails with `No such image: nemohermes:local` — that tag exists in no
+it fails with `No such image: nemohermes-api:local` — that tag exists in no
 registry.
 
 To ship the built image to a machine that cannot build:
 
 ```bash
 docker compose build
-docker save -o nemohermes-local.tar nemohermes:local     # ~190 MB
+docker save -o nemohermes-api-local.tar nemohermes-api:local     # ~190 MB
 ```
 
 On the target machine, put the tar next to this folder and load it before
 starting:
 
 ```bash
-docker load -i nemohermes-local.tar
+docker load -i nemohermes-api-local.tar
 docker compose up -d
 ```
 
@@ -344,7 +344,7 @@ and the sandbox base images are not in it.
 
 ```bash
 docker compose ps
-docker exec nemohermes journalctl -u nemohermes -f    # bootstrap log
+docker exec nemohermes-api journalctl -u nemohermes -f    # bootstrap log
 docker compose restart                                # re-bind forwards, skip onboard
 docker compose down                                   # stop; named volumes stay
 docker compose down -v                                # wipe volumes; next start is a first start
@@ -373,7 +373,7 @@ tars up this folder and ships it to the daemon as the *build context* — before
 reading a single instruction. The `Dockerfile` here creates every file it needs
 with heredoc `COPY`, and reads nothing from disk, so that upload is pure waste.
 `.dockerignore` shrinks it to almost nothing, which matters most when a ~190 MB
-`nemohermes-local.tar` is sitting in the folder: without it, that tar is
+`nemohermes-api-local.tar` is sitting in the folder: without it, that tar is
 re-uploaded to the daemon on every build.
 
 It also excludes `.env` as defence in depth. Note that this is *not* what keeps
@@ -388,7 +388,7 @@ only if you ever introduce a real `COPY <path>` from disk.
 - `.env` holds your inference API key and MCP token. It is excluded from git
   (`.gitignore`) and from the build context (`.dockerignore`), and no `COPY`
   reads from the context, so **no secret can reach an image layer** —
-  `nemohermes-local.tar` is safe to distribute.
+  `nemohermes-api-local.tar` is safe to distribute.
 - Do not hand out the *folder* with a filled-in `.env` in it, and keep it off
   shared drives. Share `.env.example` instead.
 - The container is **privileged**. It does not use the host Docker engine and
