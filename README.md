@@ -169,8 +169,18 @@ that matter.
 docker compose up -d
 ```
 
-Then watch the bootstrap. The workload runs as a systemd unit rather than PID 1,
-so `docker compose logs` is usually **empty** — read the journal instead:
+Then watch the bootstrap:
+
+```bash
+docker compose logs -f
+```
+
+This works because compose sets `tty: true`: the workload runs as a systemd unit
+rather than PID 1, and systemd's console output — its own boot messages plus
+everything the bootstrap service prints — only reaches the Docker log driver
+through the pty that a TTY provides. Without one, `/dev/console` is a plain file
+inside the container and `docker compose logs` stays empty. For scrollback,
+filtering, or `systemctl status`-style detail, read the journal instead:
 
 ```bash
 docker exec nemohermes-api journalctl -u nemohermes -f
@@ -178,7 +188,7 @@ docker exec nemohermes-api journalctl -u nemohermes -f
 
 Expect the first start to take a while: it installs the CLI, pulls two base
 images, and builds an 84-layer sandbox image. The healthcheck allows **15
-minutes** before reporting `unhealthy`. Watch the journal before concluding that
+minutes** before reporting `unhealthy`. Watch the logs before concluding that
 it hung.
 
 A healthy first start ends with lines like:
@@ -269,8 +279,10 @@ Two things trip people up constantly:
 1. **Sandboxes are children, not siblings.** They are created by the *inner*
    dockerd, so they appear in `docker compose exec nemohermes docker ps` and
    never in the host's `docker ps`.
-2. **`docker compose logs` is empty by design.** The workload is a systemd unit;
-   its output goes to the journal.
+2. **The workload is a systemd unit, not PID 1.** Its output goes to the
+   journal; compose sets `tty: true` so the console half also reaches
+   `docker compose logs`, but `journalctl -u nemohermes` is still the place for
+   scrollback and filtering.
 
 The bootstrap script does far more than start things — on every boot it
 reconciles the state NemoClaw leaves behind after an interrupted run (stale

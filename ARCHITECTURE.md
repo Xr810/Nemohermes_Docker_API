@@ -188,7 +188,7 @@ start. All of it is idempotent and a no-op on a healthy deployment.
 | Empty directories dockerd created for missing bind sources | `failed to read sandbox token`, `... is a directory` | `rmdir`, which only ever removes an *empty* directory — real keys and tokens cannot be touched |
 | Half-written gateway PKI | `partial PKI state ... some files exist but not all` | Moved aside so the gateway regenerates |
 | Sandbox stuck in `Error` phase | Next onboard aborts with `already exists as OpenClaw` | Deleted; `Ready` and `Running` sandboxes are never touched |
-| `gateway.env` generated once, never revisited | Stale supervisor path or bind address forever | Reconciled against the declared values |
+| `gateway.env` generated once, never revisited | Stale supervisor path forever, so the gateway launches a binary that is gone | The supervisor path is reconciled against the one `publish_shared_binaries` just published. The bind address is reconciled the same way, but only when `NEMOCLAW_GATEWAY_BIND_ADDRESS` is set — this image deliberately never sets it (NemoClaw rejects the override), so that half is dormant |
 | Gateway unit rewritten to a non-trusted `ExecStart` | `service identity is not a trusted OpenShell gateway` | Reset to `/usr/local/bin/openshell-gateway` |
 | Sandbox container stopped by `compose down` | Onboard tries to recreate and aborts on backup | Started again; removed only if it will not start, so onboard can recreate it |
 | CLI installed into the writable layer, lost on recreate | `nemoclaw/openshell missing after install` | Published into `/root/bin` on the named volume, with symlinks from `/usr/local/bin` |

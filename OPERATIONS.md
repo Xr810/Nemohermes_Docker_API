@@ -121,11 +121,13 @@ docker compose down                    # stop; named volumes stay
 docker compose up -d                   # apply an .env change
 ```
 
-Inside the container the workload is a systemd unit, not PID 1, so
-`docker compose logs` is usually empty:
+Inside the container the workload is a systemd unit, not PID 1. Its output goes
+to the journal, and — because compose sets `tty: true` — the console half also
+reaches `docker compose logs -f`:
 
 ```bash
-docker exec nemohermes-api journalctl -u nemohermes -f      # bootstrap log
+docker compose logs -f                                      # container console
+docker exec nemohermes-api journalctl -u nemohermes -f      # bootstrap log, with scrollback
 docker compose exec nemohermes systemctl status nemohermes.service
 docker compose exec nemohermes systemctl status docker.service
 docker compose exec nemohermes systemctl --user status nemoclaw-openshell-gateway.service
@@ -322,7 +324,7 @@ A sandbox container in `restarting` state almost always means config drift.
 | Dashboard or API port not answering | Check `openshell -g nemoclaw forward list` first — the app is usually running and only the tunnel died. `docker compose restart` recreates them |
 | Other device cannot reach `:8642` | Use this machine's LAN IP, not `127.0.0.1`; published ports need the process to listen on `0.0.0.0` (compose sets `FORWARD_BIND`); allow the port on the host firewall |
 | `/health` returns 200 but chat fails | The forward is up and the chain is not. Run the `chat/completions` check in [README.md](README.md#verify-it-is-actually-serving) |
-| `docker compose logs` empty | Expected. Use `docker exec nemohermes-api journalctl -u nemohermes -f` |
+| `docker compose logs` shows nothing | Under compose this should not happen (`tty: true` wires the console to the log driver). If you ran the image outside compose without `-t`, it will — use `docker exec nemohermes-api journalctl -u nemohermes -f`, which works either way |
 
 For start-up and onboard failures — inner dockerd, the user manager, the gateway
 bridge route, stale locks — see

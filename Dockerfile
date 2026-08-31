@@ -197,9 +197,9 @@ done
 # ---- Helpers ----
 
 # Logging helpers. The unit runs with StandardOutput=journal+console, so every
-# line here lands in `journalctl -u nemohermes` -- the only place the bootstrap
-# is observable, since the workload is not PID 1 and `docker compose logs` stays
-# empty.
+# line here lands in `journalctl -u nemohermes`. Under compose the console half
+# also reaches `docker compose logs` (the compose file sets `tty: true`); a
+# `docker run` without -t keeps the journal as the only place to look.
 log() { echo "[nemohermes] $*"; }
 die() { echo "[nemohermes] ERROR: $*" >&2; exit 1; }
 log_warn_mcp() { echo "[nemohermes] WARN: $*" >&2; }
@@ -929,9 +929,14 @@ done
 ENTRY
 RUN chmod +x /usr/local/sbin/nemohermes
 
-# The workload runs as a system unit, not as PID 1: journal+console puts its
-# output in `docker logs`. After=docker.service user@0.service means it starts
-# only once inner dockerd and the user manager that will own the gateway are up.
+# The workload runs as a system unit, not as PID 1, so its output goes to the
+# journal (journalctl -u nemohermes) and to /dev/console. The console half only
+# reaches `docker logs` when the container has a TTY -- without one Docker never
+# creates the device and /dev/console is a plain file that swallows every line.
+# docker-compose.yml sets `tty: true` for exactly that reason; `docker run`
+# without -t sees an empty `docker logs` and must use journalctl.
+# After=docker.service user@0.service means it starts only once inner dockerd
+# and the user manager that will own the gateway are up.
 COPY <<'UNIT' /etc/systemd/system/nemohermes.service
 [Unit]
 Description=NemoHermes bootstrap (onboard, approvals, MCP, forwards)

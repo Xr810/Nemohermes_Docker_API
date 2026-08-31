@@ -73,6 +73,17 @@ services:
     # Inner dockerd must stop its sandbox containers first.
     stop_grace_period: 60s
 
+    # Required for `docker compose logs` to show anything at all. systemd
+    # reopens PID 1's own stdout on /dev/null and writes its status -- and the
+    # output of any unit with StandardOutput=...+console, which nemohermes.service
+    # is -- to /dev/console instead. Without a TTY Docker never creates that
+    # device, /dev/console is a plain FILE inside the container, and every log
+    # line is swallowed into it: `docker compose logs` stays empty forever.
+    # With a TTY /dev/console is a real pty wired to the log driver.
+    # journalctl -u nemohermes works either way; this is what makes the
+    # documented `docker compose logs -f` work too.
+    tty: true
+
     ports:
       - "${HERMES_API_PORT:-8642}:${HERMES_API_PORT:-8642}"
       - "${HERMES_DASHBOARD_PORT:-18789}:${HERMES_DASHBOARD_PORT:-18789}"
