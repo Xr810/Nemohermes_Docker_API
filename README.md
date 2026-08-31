@@ -250,7 +250,7 @@ Useful to know before you debug anything, because almost nothing is where a
 single-process container would put it.
 
 ```text
-nemohermes  (privileged wrapper container)
+nemohermes-api  (privileged wrapper container)
 │
 ├─ PID 1  /lib/systemd/systemd
 │  ├─ docker.service ................ inner dockerd (the "child" engine)

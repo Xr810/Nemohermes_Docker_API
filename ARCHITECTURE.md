@@ -62,10 +62,14 @@ runs as `nemohermes.service`, whose output goes to the journal and the console.
 Inner `docker.service` is enabled in the image (not masked) so dockerd starts
 under the same systemd.
 
-Because the workload is a systemd unit rather than PID 1, `docker compose logs`
-is often empty. Read the journal instead:
+Because the workload is a systemd unit rather than PID 1, that console output
+only reaches the Docker log driver through a TTY. Compose sets `tty: true`, so
+`docker compose logs -f` shows the bootstrap live. Without a TTY (`docker run`
+without `-t`), `/dev/console` is a plain file and `docker logs` stays empty.
+The journal works either way, and is the place for scrollback and filtering:
 
 ```bash
+docker compose logs -f
 docker exec nemohermes-api journalctl -u nemohermes -f
 ```
 
@@ -232,7 +236,7 @@ If you previously ran a compose file that bound `/var/run/docker.sock` and
 | `Timed out waiting for the sandbox mutation lock` | A lock from a dead generation the entrypoint judged live. Recreate the container; if it persists, `docker compose down` then `up -d` |
 | `already exists as OpenClaw` | A sandbox left in `Error` phase. The entrypoint clears these; if it persists, `docker compose exec nemohermes openshell -g nemoclaw sandbox delete <name>` |
 | Onboard fails at step 2/8 with a firewall warning | The gateway bridge route. Check the journal for `sandbox route:` and confirm `openshell-docker` exists in `docker compose exec nemohermes docker network ls` |
-| First start seems stuck | It builds an 84-layer sandbox image. The healthcheck allows 15 minutes; watch the journal before concluding it hung |
+| First start seems stuck | It builds an 84-layer sandbox image. The healthcheck allows 15 minutes; watch `docker compose logs -f` (or the journal) before concluding it hung |
 
 These are start-up and onboard failures. Day-two problems — the model, MCP,
 approvals, a dead forward — are in

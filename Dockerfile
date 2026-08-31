@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# NemoHermes wrapper image -- builds `nemohermes:local`.
+# NemoHermes wrapper image -- builds `nemohermes-api:local`.
 #
 # Ubuntu 24.04, systemd as PID 1, an inner dockerd, and the bootstrap script
 # that runs onboard, approvals, MCP registration and the port forwards. The
@@ -15,7 +15,7 @@
 #
 # Build and run:
 #
-#   docker compose build            # produce nemohermes:local
+#   docker compose build            # produce nemohermes-api:local
 #   docker compose up -d            # builds first if the image is missing
 #   docker compose up -d --build    # rebuild after editing this file
 #
